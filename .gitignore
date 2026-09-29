@@ -3,6 +3,7 @@
 __pycache__
 *.pyc
 build*
+*egg-info
 doc/build
 doc/env
 **-checkpoint.ipynb

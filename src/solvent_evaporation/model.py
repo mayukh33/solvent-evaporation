@@ -108,24 +108,20 @@ class EvaporationModel:
         return phi, w / L_hat, delta_hat, L_hat
 
     # --- interface -------------------------------------------------------------
-    def jump_balance(self, phi_s_n, phi_last, psi_first, delta_hat, L_hat,
+    def jump_balance(self, phi_1s, phi_last, psi_first, delta_hat, L_hat,
                      full_output=False):
-        """r_i = j_i - phi_i^s delta' - n_i, components 1..N-1, at phi_s.
+        """r = j_1 - phi_1^s delta' - n_1 at the surface fraction phi_1s.
 
         The liquid side of the interface less the gas side: what diffuses up to
         the interface, less what the moving interface carries and what leaves
-        into the gas.  r = 0 fixes phi_s.  With full_output, the state the gas
+        into the gas.  r = 0 fixes phi_1s.  With full_output, the state the gas
         side implies instead: phi_s, the flux n_i, the draft s and delta'.
         """
         m = self.mixture
-        n = m.n - 1
         # the interface lies half a cell from either neighbouring cell centre
         h_l = 0.5 * delta_hat * self.liquid_grid.step
         h_g = 0.5 * L_hat * self.gas_grid.step
-        components = {}
-        for i, name in enumerate(m.components):
-            components[name] = phi_s_n[i]
-        phi_s = m.volume_fractions(components)
+        phi_s = m.volume_fractions({m.components[0]: phi_1s})
 
         # psi_i^s = gamma_i gamma^act_i x_i^(l)(phi^s): equilibrium at the interface
         psi_s = m.vapour_fraction(phi_s)
@@ -147,23 +143,23 @@ class EvaporationModel:
         if full_output:
             return phi_s, flux, slip, ddelta_dt
 
-        # j_i = -[D](phibar) dphi/dz_hat -> [D](phi_i,nl - phi_i^s) / h_l
-        j_liquid = numpy.matmul(m.fick_matrix(0.5 * (phi_s + phi_last)),
-                                phi_last[:n] - phi_s[:n]) / h_l
-        # r_i = j_i - phi_i^s delta' - n_i = 0: liquid side minus gas side
-        return j_liquid - phi_s[:n] * ddelta_dt - flux[:n]
+        # j_1 = -D(phibar) dphi_1/dz_hat -> D (phi_1,nl - phi_1^s) / h_l
+        D = m.fick_matrix(0.5 * (phi_s + phi_last))[0, 0]
+        j_liquid = D * (phi_last[0] - phi_s[0]) / h_l
+        # r = j_1 - phi_1^s delta' - n_1 = 0: liquid side minus gas side
+        return j_liquid - phi_s[0] * ddelta_dt - flux[0]
 
-    def interface(self, phi_last, psi_first, delta_hat, L_hat, max_iter=100):
+    def interface(self, phi_last, psi_first, delta_hat, L_hat, max_iter=100, tol=1e-12):
         """phi_s, the flux n_i, the draft s and delta' where the balance vanishes."""
-        n = self.mixture.n - 1
         cells = (phi_last, psi_first, delta_hat, L_hat)
-        # r(phi_s) = 0 by bounded least squares.  The box is what picks the
-        # physical root: r vanishes at compositions outside it as well.
-        solved = scipy.optimize.least_squares(
-            self.jump_balance, numpy.clip(phi_last[:n], 0.0, 1.0), args=cells,
-            bounds=(0.0, 1.0), max_nfev=max_iter,
-            xtol=1e-10, ftol=1e-10, gtol=1e-15)
-        return self.jump_balance(solved.x, *cells, full_output=True)
+        phi_1s = scipy.optimize.brentq(self.jump_balance, 0.0, 1.0, args=cells,
+                                       xtol=1e-15, maxiter=max_iter)
+        residual = self.jump_balance(phi_1s, *cells)
+        if abs(residual) > tol:
+            raise RuntimeError(
+                f"the interface solve stopped short of a root at phi_s = "
+                f"{phi_1s}: |r| = {abs(residual):.3g}.")
+        return self.jump_balance(phi_1s, *cells, full_output=True)
 
     # --- face fluxes -----------------------------------------------------------
     def liquid_faces(self, phi, delta_hat, flux, ddelta_dt):

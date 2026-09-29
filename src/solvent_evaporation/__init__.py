@@ -7,3 +7,5 @@ from .compute import Result, compute
 
 __all__ = ["Grid", "Ideal", "Margules", "Mixture", "EvaporationModel",
            "Result", "compute"]
+
+__version__ = "0.1.0"

@@ -39,10 +39,10 @@ class Margules:
 
 
 class Mixture:
-    """N solvents as dimensionless groups; any component order is accepted.
+    """Two solvents as dimensionless groups; either order is accepted.
 
-    The components are known by name.  The first N-1 are independent; the last
-    is the balance, whose volume fraction is whatever the others leave.
+    The components are known by name.  The first is independent; the second
+    is the balance, whose volume fraction is whatever the first leaves.
     """
 
     def __init__(self, gamma, alpha, theta, nu, D0, activity=None, names=None):
@@ -52,6 +52,10 @@ class Mixture:
         self.nu = numpy.asarray(nu, dtype=float)
         self.D0 = numpy.asarray(D0, dtype=float)
         self.n = self.gamma.size
+        # the interface solve brackets a single unknown: two components only
+        if self.n != 2:
+            raise ValueError(f"Give two "
+                             f"solvents, not {self.n}")
         self.activity = Ideal() if activity is None else activity
 
         if names is None:
