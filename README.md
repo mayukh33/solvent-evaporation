@@ -1,1 +1,1 @@
-Simple numerical model for capturing two-component solvent evaporation
+Simple numerical model for two-component solvent evaporation
