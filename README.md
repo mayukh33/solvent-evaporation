@@ -1,1 +1,1 @@
-Solvent evaporation numerical model
+Simple numerical model for capturing solvent evaporation
