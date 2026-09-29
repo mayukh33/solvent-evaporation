@@ -39,10 +39,10 @@ class Margules:
 
 
 class Mixture:
-    """N solvents as dimensionless groups; any component order is accepted.
+    """Two solvents as dimensionless groups; either order is accepted.
 
-    The components are known by name.  The first N-1 are independent; the last
-    is the balance, whose volume fraction is whatever the others leave.
+    The components are known by name.  The first is independent; the second
+    is the balance, whose volume fraction is whatever the first leaves.
     """
 
     def __init__(self, gamma, alpha, theta, nu, D0, activity=None, names=None):
@@ -52,6 +52,10 @@ class Mixture:
         self.nu = numpy.asarray(nu, dtype=float)
         self.D0 = numpy.asarray(D0, dtype=float)
         self.n = self.gamma.size
+        # the interface solve brackets a single unknown: two components only
+        if self.n != 2:
+            raise ValueError(f"Give two "
+                             f"solvents, not {self.n}")
         self.activity = Ideal() if activity is None else activity
 
         if names is None:
@@ -76,12 +80,10 @@ class Mixture:
         for name in self.components:
             phi[name] = numpy.asarray(components[name], dtype=float)
 
-        # phi_balance = 1 - sum_{i independent} phi_i
         phi[self.balance] = 1.0
         for name in self.components:
             phi[self.balance] = phi[self.balance] - phi[name]
 
-        # sum_i phi_i = 1, over every component
         total = 0.0
         for name in self.names:
             total = total + phi[name]
@@ -98,7 +100,6 @@ class Mixture:
 
     def mole_fractions(self, phi):
         """Mole fractions at phi (N,), normalised over components; not clipped."""
-        # x_i = (phi_i/nu_i) / sum_k (phi_k/nu_k)
         c = phi / self.nu
         return c / c.sum()
 

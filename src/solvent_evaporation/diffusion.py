@@ -3,7 +3,6 @@ import numpy
 try:
     from numba import njit
 except ImportError:
-    # numba is optional
     def njit(function=None, **options):
         return function if function is not None else njit
 
@@ -61,9 +60,7 @@ def fick_matrix(phi, nu, D0, Gamma):
 
     # T_ik = delta_ik - c_i (nu_k - nu_N): molar frame -> volume frame
     T = numpy.eye(n) - numpy.outer(c[:n], nu[:n] - nu[-1])
-    # X_jl = dx_j/dphi_l: grad x -> grad phi
     X = mole_fraction_jacobian(phi, nu)
-    # [D] = diag(nu) T c_t B^-1 Gamma X, accumulated left to right
     fick = numpy.diag(nu[:n]) @ T
     fick = fick @ (c_t * numpy.linalg.inv(B))
     fick = fick @ Gamma
