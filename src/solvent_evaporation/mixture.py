@@ -80,12 +80,10 @@ class Mixture:
         for name in self.components:
             phi[name] = numpy.asarray(components[name], dtype=float)
 
-        # phi_balance = 1 - sum_{i independent} phi_i
         phi[self.balance] = 1.0
         for name in self.components:
             phi[self.balance] = phi[self.balance] - phi[name]
 
-        # sum_i phi_i = 1, over every component
         total = 0.0
         for name in self.names:
             total = total + phi[name]
@@ -102,7 +100,6 @@ class Mixture:
 
     def mole_fractions(self, phi):
         """Mole fractions at phi (N,), normalised over components; not clipped."""
-        # x_i = (phi_i/nu_i) / sum_k (phi_k/nu_k)
         c = phi / self.nu
         return c / c.sum()
 

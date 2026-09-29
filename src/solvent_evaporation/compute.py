@@ -22,8 +22,8 @@ class Result:
     """Simulation output, all scaled.  Profiles are [component, cell, time]."""
 
     model: object
-    t: numpy.ndarray               # t_hat
-    delta: numpy.ndarray           # delta_hat
+    t: numpy.ndarray
+    delta: numpy.ndarray
     phi: numpy.ndarray             # liquid volume fractions
     psi: numpy.ndarray             # vapour, liquid-equivalent
     phi_interface: numpy.ndarray
@@ -41,7 +41,6 @@ class Result:
 def jacobian(model, t, y, f0, eps=1e-7):
     """df/dy by forward differences about y, where f0 = f(t, y) already is.
     """
-    # J[:, i] = (f(y + h e_i) - f(y)) / h,  h = eps |y_i|
     J = numpy.empty((y.size, y.size))
     for i in range(y.size):
         h = eps * abs(y[i])
@@ -70,7 +69,6 @@ def compute(model, t_end, dt, store_period=1, progress=0):
     """March from t_hat = 0 to t_end in steps of exactly dt."""
     n_steps = numpy.max((1, numpy.round(t_end / dt))).astype(numpy.int64)
 
-    # Worked out up front so states is allocated once at its final size.
     keep = numpy.unique(numpy.append(numpy.arange(0, n_steps + 1, store_period),
                                      n_steps))
     states = numpy.empty((model.size, keep.size))
@@ -90,7 +88,6 @@ def compute(model, t_end, dt, store_period=1, progress=0):
             if progress and k % progress == 0:
                 show_progress(k, n_steps, k * dt, y[model.delta_index], started)
     except KeyboardInterrupt:
-        # Keyboard interruption does not result in loss of data.
         print(f"\ninterrupted at step {k} of {n_steps} (t_hat = {k * dt:.6g}); "
               f"returning {kept} stored times, to t_hat = "
               f"{keep[kept - 1] * dt:.6g}")

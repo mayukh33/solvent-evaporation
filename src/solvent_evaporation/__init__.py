@@ -1,4 +1,4 @@
-"""Multicomponent solvent evaporation into still air, by the method of lines."""
+"""Two-component solvent evaporation into still air, by the method of lines."""
 
 from .mesh import Grid
 from .mixture import Ideal, Margules, Mixture

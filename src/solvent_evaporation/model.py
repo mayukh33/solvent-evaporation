@@ -19,12 +19,11 @@ def liquid_face_fluxes(phi, phi_face, Gamma, nu, D0, delta_hat, flux,
 
     F = numpy.empty((n, nl + 1))
     for i in range(n):
-        F[i, 0] = 0.0                   # no flux at the substrate
-        F[i, nl] = flux[i]              # the interface, from the jump balance
+        F[i, 0] = 0.0
+        F[i, nl] = flux[i]
     for f in range(1, nl):
         D = fick_matrix(phi_face[f - 1], nu, D0, Gamma[f - 1])
         for i in range(n):
-            # -[D](phibar_f) dphi/dz_hat|_f, summed over the k gradients
             diffusion = 0.0
             for k in range(n):
                 diffusion += D[i, k] * ((phi[k, f] - phi[k, f - 1])
@@ -48,7 +47,7 @@ def gas_face_fluxes(psi, L_hat, flux, slip, ddelta_dt, alpha, psi_ambient,
 
     G = numpy.empty((N, ng + 1))
     for i in range(N):
-        G[i, 0] = flux[i]               # the interface, the same n_i
+        G[i, 0] = flux[i]
         for f in range(1, ng):
             psi_face = 0.5 * (psi[i, f - 1] + psi[i, f])
             drift = (slip - (faces[f] - start) * dL_dt) * psi_face
@@ -100,7 +99,6 @@ class EvaporationModel:
         L_hat = self.b_hat - delta_hat
         u = y[:self.liquid_end].reshape(N - 1, self.liquid_grid.n)
         w = y[self.liquid_end:self.delta_index].reshape(N, self.gas_grid.n)
-        # row i of u is the i-th independent component
         components = {}
         for i, name in enumerate(self.mixture.components):
             components[name] = u[i] / delta_hat
@@ -110,12 +108,8 @@ class EvaporationModel:
     # --- interface -------------------------------------------------------------
     def jump_balance(self, phi_1s, phi_last, psi_first, delta_hat, L_hat,
                      full_output=False):
-        """r = j_1 - phi_1^s delta' - n_1 at the surface fraction phi_1s.
-
-        The liquid side of the interface less the gas side: what diffuses up to
-        the interface, less what the moving interface carries and what leaves
-        into the gas.  r = 0 fixes phi_1s.  With full_output, the state the gas
-        side implies instead: phi_s, the flux n_i, the draft s and delta'.
+        """r = j_1 - phi_1^s delta' - n_1 at phi_1s: liquid side minus gas side.
+        full_output: phi_s, the flux n_i, the draft s and delta'.
         """
         m = self.mixture
         # the interface lies half a cell from either neighbouring cell centre
@@ -136,9 +130,7 @@ class EvaporationModel:
                 "excludes.")
         # s = (sum_i jt_i/theta_i) / x_a^s: draft set by the insoluble air
         slip = (j_gas / m.theta).sum() / (1.0 - vapour)
-        # n_i = psi_i^s s + jt_i: gas side of the jump
         flux = psi_s * slip + j_gas
-        # delta' = -sum_i n_i: the film loses what leaves it
         ddelta_dt = -flux.sum()
         if full_output:
             return phi_s, flux, slip, ddelta_dt
@@ -190,7 +182,6 @@ class EvaporationModel:
                                self.mixture.alpha, self.psi_ambient,
                                gas.faces, gas.start, gas.step)
 
-    # right hand side of the ode
     def rhs(self, t, y):
         """d(state)/dt_hat.  t does not appear: nothing is driven externally."""
         N, n = self.mixture.n, self.mixture.n - 1
