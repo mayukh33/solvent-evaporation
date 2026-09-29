@@ -1,6 +1,14 @@
 import numpy
 
+try:
+    from numba import njit
+except ImportError:
+    # numba is optional
+    def njit(function=None, **options):
+        return function if function is not None else njit
 
+
+@njit(cache=True)
 def maxwell_stefan_diffusivities(x, D0):
     """Vignes diffusivities D_ij, (N, N), at mole fractions x.  Diagonal unused."""
     # D_ij = D0_ji^x_i D0_ij^x_j prod_{k != i,j} (D0_ik D0_jk)^(x_k/2)
@@ -17,6 +25,7 @@ def maxwell_stefan_diffusivities(x, D0):
     return D
 
 
+@njit(cache=True)
 def mole_fraction_jacobian(phi, nu):
     """X_jl = dx_j/dphi_l, (N-1, N-1), at volume fractions phi, with phi_N eliminated."""
     # X_jl = delta_jl/(nu_j c_t) - (c_j/c_t^2)(1/nu_l - 1/nu_N)
@@ -27,9 +36,10 @@ def mole_fraction_jacobian(phi, nu):
             - numpy.outer(c[:n] / c_t ** 2, 1.0 / nu[:n] - 1.0 / nu[-1]))
 
 
-def fick_matrix(phi, nu, D0):
+@njit(cache=True)
+def fick_matrix(phi, nu, D0, Gamma):
     """Volume-frame Fick matrix over D_ref, (N-1, N-1), at volume fractions phi."""
-    # j = -[D] grad phi ,  [D] = diag(nu) T c_t B^-1 X
+    # j = -[D] grad phi ,  [D] = diag(nu) T c_t B^-1 Gamma X
     N = phi.size
     n = N - 1
     c = phi / nu
@@ -40,8 +50,11 @@ def fick_matrix(phi, nu, D0):
     # B_ii = x_i/D_iN + sum_{k != i} x_k/D_ik ;  B_ij = -x_i (1/D_ij - 1/D_iN)
     B = numpy.empty((n, n))
     for i in range(n):
-        B[i, i] = x[i] * inv_D[i, N - 1] + sum(
-            x[k] * inv_D[i, k] for k in range(N) if k != i)
+        others = 0.0
+        for k in range(N):
+            if k != i:
+                others += x[k] * inv_D[i, k]
+        B[i, i] = x[i] * inv_D[i, N - 1] + others
         for j in range(n):
             if j != i:
                 B[i, j] = -x[i] * (inv_D[i, j] - inv_D[i, N - 1])
@@ -50,7 +63,8 @@ def fick_matrix(phi, nu, D0):
     T = numpy.eye(n) - numpy.outer(c[:n], nu[:n] - nu[-1])
     # X_jl = dx_j/dphi_l: grad x -> grad phi
     X = mole_fraction_jacobian(phi, nu)
-    # [D] = diag(nu) T c_t B^-1 X, accumulated left to right
-    fick = numpy.matmul(numpy.diag(nu[:n]), T)
-    fick = numpy.matmul(fick, c_t * numpy.linalg.inv(B))
-    return numpy.matmul(fick, X)
+    # [D] = diag(nu) T c_t B^-1 Gamma X, accumulated left to right
+    fick = numpy.diag(nu[:n]) @ T
+    fick = fick @ (c_t * numpy.linalg.inv(B))
+    fick = fick @ Gamma
+    return fick @ X
