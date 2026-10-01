@@ -6,12 +6,12 @@ class Ideal:
     """Ideal solution.  An activity model is any object with these two methods."""
 
     def ln_gamma(self, x):
-        """ln gamma^act_i, (N,), at liquid mole fractions x (N,)."""
+        """ln gamma_i, (N,), at liquid mole fractions x (N,)."""
         return numpy.zeros_like(x)
 
     def thermodynamic_factor(self, x):
         """[Gamma], (N-1, N-1), at mole fractions x (N,), with x_N eliminated."""
-        # Gamma_ij = delta_ij + x_i d(ln gamma^act_i)/dx_j
+        # Gamma_ij = delta_ij + x_i d(ln gamma_i)/dx_j
         return numpy.eye(x.size - 1)
 
 
@@ -22,7 +22,7 @@ class Margules:
         self.A12, self.A21 = float(A12), float(A21)
 
     def ln_gamma(self, x):
-        """ln gamma^act_i, (2,), at liquid mole fractions x (2,)."""
+        """ln gamma_i, (2,), at liquid mole fractions x (2,)."""
         # ln gamma_1 = x_2^2 [A12 + 2 (A21 - A12) x_1]
         # ln gamma_2 = x_1^2 [A21 + 2 (A12 - A21) x_2]
         x1, x2 = x
@@ -45,13 +45,14 @@ class Mixture:
     is the balance, whose volume fraction is whatever the first leaves.
     """
 
-    def __init__(self, gamma, alpha, theta, nu, D0, activity=None, names=None):
-        self.gamma = numpy.asarray(gamma, dtype=float)
+    def __init__(self, psi_sat, alpha, theta, V_bar, D0, activity=None,
+                 names=None):
+        self.psi_sat = numpy.asarray(psi_sat, dtype=float)
         self.alpha = numpy.asarray(alpha, dtype=float)
         self.theta = numpy.asarray(theta, dtype=float)
-        self.nu = numpy.asarray(nu, dtype=float)
+        self.V_bar = numpy.asarray(V_bar, dtype=float)
         self.D0 = numpy.asarray(D0, dtype=float)
-        self.n = self.gamma.size
+        self.n = self.psi_sat.size
         # the interface solve brackets a single unknown: two components only
         if self.n != 2:
             raise ValueError(f"Give two "
@@ -100,16 +101,16 @@ class Mixture:
 
     def mole_fractions(self, phi):
         """Mole fractions at phi (N,), normalised over components; not clipped."""
-        c = phi / self.nu
-        return c / c.sum()
+        C_i = phi / self.V_bar
+        return C_i / C_i.sum()
 
     def vapour_fraction(self, phi):
-        """Modified Raoult's law: psi_i = gamma_i gamma^act_i x_i."""
-        # psi_i^s = gamma_i gamma^act_i x_i^(l),  gamma_i = p_sat,i v_i / (R T)
+        """Modified Raoult's law: psi_i = psi_sat,i gamma_i x_i."""
+        # psi_i^s = psi_sat,i gamma_i x_i^(l),  psi_sat,i = p_sat,i V_bar_i / (R T)
         x = self.mole_fractions(phi)
-        return self.gamma * numpy.exp(self.activity.ln_gamma(x)) * x
+        return self.psi_sat * numpy.exp(self.activity.ln_gamma(x)) * x
 
     def fick_matrix(self, phi):
         """Volume-frame Fick matrix over D_ref, (N-1, N-1), at phi (N,)."""
         Gamma = self.activity.thermodynamic_factor(self.mole_fractions(phi))
-        return diffusion.fick_matrix(phi, self.nu, self.D0, Gamma)
+        return diffusion.fick_matrix(phi, self.V_bar, self.D0, Gamma)
