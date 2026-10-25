@@ -83,13 +83,13 @@ class Mixture:
 
         phi[self.balance] = 1.0
         for name in self.components:
-            phi[self.balance] = phi[self.balance] - phi[name]
+            phi[self.balance] -= phi[name]
 
         total = 0.0
         for name in self.names:
-            total = total + phi[name]
+            total += phi[name]
         error = numpy.max(numpy.abs(total - 1.0))
-        # not (error <= tol), so that a NaN fails as well
+        
         if not error <= tol:
             raise ValueError(f"volume fractions of {' + '.join(self.names)} "
                              f"do not sum to one: off by {error:.3g}")
