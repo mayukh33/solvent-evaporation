@@ -14,10 +14,10 @@ def ideal():
     V_bar = numpy.array([1.0, 2.0])             # molar volumes, B's twice A's
     D0 = numpy.array([[0.0, 1.0], [3.0, 0.0]])  # A dilute in B, B dilute in A
     D_g = numpy.array([2.0, 4.0])               # each vapour in air
-    psi_sat = numpy.array([1e-3, 1e-4])         # the interface's only
+    phi_g_sat = numpy.array([0.1, 0.005])       # the interface's only
     theta = numpy.array([1e-2, 2e-2])           # the interface's only
-    return Mixture(psi_sat=psi_sat, alpha=1.0 / D_g, theta=theta, V_bar=V_bar,
-                   D0=D0, activity=Ideal(), names=["A", "B"])
+    return Mixture(phi_g_sat=phi_g_sat, alpha=1.0 / D_g, theta=theta,
+                   V_bar=V_bar, D0=D0, activity=Ideal(), names=["A", "B"])
 
 
 @pytest.fixture
