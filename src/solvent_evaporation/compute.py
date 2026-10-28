@@ -26,7 +26,7 @@ class Result:
     t: numpy.ndarray
     delta: numpy.ndarray
     phi: numpy.ndarray             # liquid volume fractions
-    psi: numpy.ndarray             # vapour, liquid-equivalent
+    phi_g: numpy.ndarray           # gas volume fractions
     phi_interface: numpy.ndarray
     flux: numpy.ndarray            # evaporative flux n_i
 
@@ -98,14 +98,14 @@ def post_process(model, t, states):
     nt = t.size
     delta = numpy.empty(nt)
     phi = numpy.empty((m.n, model.liquid_grid.n, nt))
-    psi = numpy.empty((m.n, model.gas_grid.n, nt))
+    phi_g = numpy.empty((m.n, model.gas_grid.n, nt))
     phi_interface = numpy.empty((m.n, nt))
     flux = numpy.empty((m.n, nt))
 
     for c in range(nt):
-        phi[..., c], psi[..., c], delta[c], L_hat = model.fields(states[:, c])
+        phi[..., c], phi_g[..., c], delta[c], L_hat = model.fields(states[:, c])
         phi_interface[:, c], flux[:, c], _, _ = model.interface(
-            phi[:, -1, c], psi[:, 0, c], delta[c], L_hat)
+            phi[:, -1, c], phi_g[:, 0, c], delta[c], L_hat)
 
-    return Result(model=model, t=t, delta=delta, phi=phi, psi=psi,
+    return Result(model=model, t=t, delta=delta, phi=phi, phi_g=phi_g,
                   phi_interface=phi_interface, flux=flux)

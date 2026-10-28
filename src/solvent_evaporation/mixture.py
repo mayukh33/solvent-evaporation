@@ -15,29 +15,6 @@ class Ideal:
         return numpy.eye(x.size - 1)
 
 
-class Margules:
-    """Binary two-parameter Margules: A12 = ln gamma_1^inf, A21 = ln gamma_2^inf."""
-
-    def __init__(self, A12, A21):
-        self.A12, self.A21 = float(A12), float(A21)
-
-    def ln_gamma(self, x):
-        """ln gamma_i, (2,), at liquid mole fractions x (2,)."""
-        # ln gamma_1 = x_2^2 [A12 + 2 (A21 - A12) x_1]
-        # ln gamma_2 = x_1^2 [A21 + 2 (A12 - A21) x_2]
-        x1, x2 = x
-        return numpy.array([x2 ** 2 * (self.A12 + 2 * (self.A21 - self.A12) * x1),
-                            x1 ** 2 * (self.A21 + 2 * (self.A12 - self.A21) * x2)])
-
-    def thermodynamic_factor(self, x):
-        """[Gamma], (1, 1), at mole fractions x (2,)."""
-        # Gamma = 1 + x_1 d(ln gamma_1)/dx_1
-        #       = 1 - 2 x_1 x_2 [A12 (2 x_2 - x_1) + A21 (2 x_1 - x_2)]
-        x1, x2 = x
-        return numpy.array([[1.0 - 2 * x1 * x2 * (self.A12 * (2 * x2 - x1)
-                                                   + self.A21 * (2 * x1 - x2))]])
-
-
 class Mixture:
     """Two solvents as dimensionless groups; either order is accepted.
 
@@ -45,14 +22,14 @@ class Mixture:
     is the balance, whose volume fraction is whatever the first leaves.
     """
 
-    def __init__(self, psi_sat, alpha, theta, V_bar, D0, activity=None,
+    def __init__(self, phi_g_sat, alpha, theta, V_bar, D0, activity=None,
                  names=None):
-        self.psi_sat = numpy.asarray(psi_sat, dtype=float)
+        self.phi_g_sat = numpy.asarray(phi_g_sat, dtype=float)
         self.alpha = numpy.asarray(alpha, dtype=float)
         self.theta = numpy.asarray(theta, dtype=float)
         self.V_bar = numpy.asarray(V_bar, dtype=float)
         self.D0 = numpy.asarray(D0, dtype=float)
-        self.n = self.psi_sat.size
+        self.n = self.phi_g_sat.size
         # the interface solve brackets a single unknown: two components only
         if self.n != 2:
             raise ValueError(f"Give two "
@@ -105,10 +82,11 @@ class Mixture:
         return C_i / C_i.sum()
 
     def vapour_fraction(self, phi):
-        """Modified Raoult's law: psi_i = psi_sat,i gamma_i x_i."""
-        # psi_i^s = psi_sat,i gamma_i x_i^(l),  psi_sat,i = p_sat,i V_bar_i / (R T)
+        """Modified Raoult's law: phi_g_i = phi_g_sat,i gamma_i x_i."""
+        # phi_g_i^s = phi_g_sat,i gamma_i x_i^(l),  phi_g_sat,i = p_sat,i / P: the
+        # gas volume (= mole) fraction of i at the interface
         x = self.mole_fractions(phi)
-        return self.psi_sat * numpy.exp(self.activity.ln_gamma(x)) * x
+        return self.phi_g_sat * numpy.exp(self.activity.ln_gamma(x)) * x
 
     def fick_matrix(self, phi):
         """Volume-frame Fick matrix over D_ref, (N-1, N-1), at phi (N,)."""
