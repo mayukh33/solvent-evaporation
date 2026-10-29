@@ -1,104 +1,49 @@
 import numpy
 import scipy
 
-# njit comes from diffusion so the optional-numba fallback lives in one place.
-from .diffusion import fick_matrix, njit
-
-
-@njit(cache=True)
-def liquid_face_fluxes(phi, phi_face, Gamma, nu, D0, delta_hat, flux,
-                       ddelta_dt, faces, step):
-    """F_i on the liquid faces f = 0 ... n_liquid, at [Gamma] given per face.
-
-    F_f = -[D](phibar_f) dphi/dz_hat|_f - eta_f delta' phibar_f, closed by no
-    flux at the substrate and by the jump balance at the interface.
-    """
-    N = phi.shape[0]
-    n = N - 1
-    nl = phi.shape[1]
-
-    F = numpy.empty((n, nl + 1))
-    for i in range(n):
-        F[i, 0] = 0.0
-        F[i, nl] = flux[i]
-    for f in range(1, nl):
-        D = fick_matrix(phi_face[f - 1], nu, D0, Gamma[f - 1])
-        for i in range(n):
-            diffusion = 0.0
-            for k in range(n):
-                diffusion += D[i, k] * ((phi[k, f] - phi[k, f - 1])
-                                        / (delta_hat * step))
-            # eta_f delta' phibar_f: the Landau term from the moving interface
-            F[i, f] = -diffusion - faces[f] * ddelta_dt * phi_face[f - 1, i]
-    return F
-
-
-@njit(cache=True)
-def gas_face_fluxes(psi, L_hat, flux, slip, ddelta_dt, alpha, psi_ambient,
-                    faces, start, step):
-    """G_i on the gas faces f = 0 ... n_gas.
-
-    G_f = [s - (eta_f - 1) L'] psibar_f - (1/alpha_i) dpsi/dz_hat|_f, closed by
-    the jump balance at the interface and by the held ambient psi outside.
-    """
-    N = psi.shape[0]
-    ng = psi.shape[1]
-    dL_dt = -ddelta_dt              # the outer edge is fixed in the laboratory
-
-    G = numpy.empty((N, ng + 1))
-    for i in range(N):
-        G[i, 0] = flux[i]
-        for f in range(1, ng):
-            psi_face = 0.5 * (psi[i, f - 1] + psi[i, f])
-            drift = (slip - (faces[f] - start) * dL_dt) * psi_face
-            gradient = (psi[i, f] - psi[i, f - 1]) / (L_hat * step)
-            G[i, f] = drift - gradient / alpha[i]
-        # eta = 2: the same face flux, one-sided against the held ambient psi
-        G[i, ng] = ((slip - dL_dt) * psi_ambient[i]
-                    - (psi_ambient[i] - psi[i, ng - 1])
-                    / (alpha[i] * 0.5 * L_hat * step))
-    return G
-
 
 class EvaporationModel:
     """One evaporating film: mixture groups, initial state, geometry, meshes."""
 
     def __init__(self, mixture, phi0, *, b_hat, liquid_grid, gas_grid,
-                 psi_ambient=None):
-        N = mixture.n
+                 phi_g_ambient=None):
+        num_components = mixture.n
         phi0 = numpy.asarray(phi0, dtype=numpy.float64)
 
         self.mixture = mixture
         self.phi0 = phi0 / phi0.sum()
         self.b_hat = numpy.float64(b_hat)
         self.L_hat0 = self.b_hat - 1.0
-        self.psi_ambient = (numpy.zeros(N) if psi_ambient is None
-                            else numpy.asarray(psi_ambient, dtype=numpy.float64))
+        self.phi_g_ambient = (numpy.zeros(num_components) if phi_g_ambient is None
+                              else numpy.asarray(phi_g_ambient, dtype=numpy.float64))
         self.liquid_grid = liquid_grid
         self.gas_grid = gas_grid
 
-        self.liquid_end = (N - 1) * self.liquid_grid.n
-        self.delta_index = self.liquid_end + N * self.gas_grid.n
+        self.liquid_end = (num_components - 1) * self.liquid_grid.n
+        self.delta_index = self.liquid_end + num_components * self.gas_grid.n
         self.size = self.delta_index + 1
 
     # --- state ----------------------------------------------------------------
 
     def initial_state(self):
-        """Uniform liquid, ambient gas, delta_hat = 1."""
+        """Uniform liquid, ambient gas, and initial delta_hat = 1.0."""
         nl, ng = self.liquid_grid.n, self.gas_grid.n
-        return numpy.concatenate((
+        delta_hat0 = 1.0
+        y0 = numpy.concatenate((
             numpy.repeat(self.phi0[:-1], nl),
-            numpy.repeat(self.psi_ambient, ng) * self.L_hat0,
-            [1.0]))
+            numpy.repeat(self.phi_g_ambient, ng) * self.L_hat0,
+            [delta_hat0]))
+        return y0
 
     def fields(self, y):
-        """Unpack: phi (N, n_liquid), psi (N, n_gas), delta_hat, L_hat."""
-        # stored u_i = delta_hat phi_i, w_i = L_hat psi_i; L_hat = b_hat - delta_hat
-        N = self.mixture.n
+        """Unpack: phi (N, n_liquid), phi_g (N, n_gas), delta_hat, L_hat."""
+        # stored u_i = delta_hat phi_i, w_i = L_hat phi_g_i; L_hat = b_hat - delta_hat
+        num_components = self.mixture.n
         delta_hat = y[self.delta_index]
         L_hat = self.b_hat - delta_hat
-        u = y[:self.liquid_end].reshape(N - 1, self.liquid_grid.n)
-        w = y[self.liquid_end:self.delta_index].reshape(N, self.gas_grid.n)
+        u = y[:self.liquid_end].reshape(num_components - 1, self.liquid_grid.n)
+        w = y[self.liquid_end:self.delta_index].reshape(num_components,
+                                                        self.gas_grid.n)
         components = {}
         for i, name in enumerate(self.mixture.components):
             components[name] = u[i] / delta_hat
@@ -106,10 +51,10 @@ class EvaporationModel:
         return phi, w / L_hat, delta_hat, L_hat
 
     # --- interface -------------------------------------------------------------
-    def jump_balance(self, phi_1s, phi_last, psi_first, delta_hat, L_hat,
+    def jump_balance(self, phi_1s, phi_last, phi_g_first, delta_hat, L_hat,
                      full_output=False):
         """r = j_1 - phi_1^s delta' - n_1 at phi_1s: liquid side minus gas side.
-        full_output: phi_s, the flux n_i, the draft s and delta'.
+        full_output: phi_s, the flux n_i, the gas velocity v*_g and delta'.
         """
         m = self.mixture
         # the interface lies half a cell from either neighbouring cell centre
@@ -117,33 +62,37 @@ class EvaporationModel:
         h_g = 0.5 * L_hat * self.gas_grid.step
         phi_s = m.volume_fractions({m.components[0]: phi_1s})
 
-        # psi_i^s = gamma_i gamma^act_i x_i^(l)(phi^s): equilibrium at the interface
-        psi_s = m.vapour_fraction(phi_s)
-        # jt_i = -(1/alpha_i) dpsi_i/dz_hat -> (psi_i^s - psi_i,1) / (alpha_i h_g)
-        j_gas = (psi_s - psi_first) / (m.alpha * h_g)
-        # xg_i = psi_i/theta_i are the gas mole fractions, so x_a^s = 1 - sum_i xg_i^s
-        vapour = (psi_s / m.theta).sum()
+        # phi_g_i^s = phi_g_sat,i gamma_i x_i^(l)(phi^s): equilibrium at the interface
+        phi_g_s = m.vapour_fraction(phi_s)
+        # j_i = -(1/alpha_i) dphi_g_i/dz_hat -> (phi_g_i^s - phi_g_i,1) / (alpha_i h_g)
+        j_gas = (phi_g_s - phi_g_first) / (m.alpha * h_g)
+        # x_a^s = 1 - sum_i phi_g_i^s: the air left at the interface
+        vapour = phi_g_s.sum()
         if vapour >= 1.0:
             raise RuntimeError(
-                f"interfacial vapour fills the gas (sum xg_i = {vapour:.4g}): "
+                f"interfacial vapour fills the gas (sum phi_g_i = {vapour:.4g}): "
                 "the film is at or above its boiling point, which this model "
                 "excludes.")
-        # s = (sum_i jt_i/theta_i) / x_a^s: draft set by the insoluble air
-        slip = (j_gas / m.theta).sum() / (1.0 - vapour)
-        flux = psi_s * slip + j_gas
-        ddelta_dt = -flux.sum()
+        # n_i = theta_i (j_i + phi_g_i^s (sum_k j_k)/x_a^s): the gas side as volume
+        # of pure liquid, the fraction being the draft v*_g - delta' that the
+        # insoluble air sets; theta_i = v_i P/(R T) is pure liquid i's molar volume
+        # over the gas's
+        gas_flux = m.theta * (j_gas + phi_g_s * j_gas.sum() / (1.0 - vapour))
+        ddelta_dt = -gas_flux.sum()
         if full_output:
-            return phi_s, flux, slip, ddelta_dt
+            # v*_g = delta' + (sum_i j_i)/x_a^s: the gas's volume-average velocity
+            v_star_g = ddelta_dt + j_gas.sum() / (1.0 - vapour)
+            return phi_s, gas_flux, v_star_g, ddelta_dt
 
-        # j_1 = -D(phibar) dphi_1/dz_hat -> D (phi_1,nl - phi_1^s) / h_l
-        D = m.fick_matrix(0.5 * (phi_s + phi_last))[0, 0]
-        j_liquid = D * (phi_last[0] - phi_s[0]) / h_l
+        D_AB = m.fick_matrix(0.5 * (phi_s + phi_last))[0, 0]
+        j_liquid = D_AB * (phi_last[0] - phi_s[0]) / h_l
         # r = j_1 - phi_1^s delta' - n_1 = 0: liquid side minus gas side
-        return j_liquid - phi_s[0] * ddelta_dt - flux[0]
+        return j_liquid - phi_s[0] * ddelta_dt - gas_flux[0]
 
-    def interface(self, phi_last, psi_first, delta_hat, L_hat, max_iter=100, tol=1e-12):
-        """phi_s, the flux n_i, the draft s and delta' where the balance vanishes."""
-        cells = (phi_last, psi_first, delta_hat, L_hat)
+    def interface(self, phi_last, phi_g_first, delta_hat, L_hat, max_iter=100, tol=1e-12):
+        """phi_s, the flux n_i, the gas velocity v*_g and delta' where the balance
+        vanishes."""
+        cells = (phi_last, phi_g_first, delta_hat, L_hat)
         phi_1s = scipy.optimize.brentq(self.jump_balance, 0.0, 1.0, args=cells,
                                        xtol=1e-15, maxiter=max_iter)
         residual = self.jump_balance(phi_1s, *cells)
@@ -155,52 +104,77 @@ class EvaporationModel:
 
     # --- face fluxes -----------------------------------------------------------
     def liquid_faces(self, phi, delta_hat, flux, ddelta_dt):
-        """F_i on the liquid faces, by liquid_face_fluxes.
+        """N_l,i on the liquid faces f = 0 ... n_liquid, (N-1, n_liquid + 1).
 
-        The face compositions and their [Gamma] are built here, because the
-        activity model is a Python object and cannot enter the jitted loop.
+        N_l,f = -[D](phibar_f) dphi/dz_hat|_f - eta_f delta' phibar_f, closed by no
+        flux at the substrate and by the jump balance at the interface.
         """
         m = self.mixture
-        N, n = m.n, m.n - 1
+        n = m.n - 1                     # independent components
         liquid = self.liquid_grid
 
-        phi_face = numpy.empty((liquid.n - 1, N))
-        Gamma = numpy.empty((liquid.n - 1, n, n))
-        for f in range(1, liquid.n):
-            for k in range(N):
-                # phibar_f = (phi_{f-1} + phi_f) / 2
-                phi_face[f - 1, k] = 0.5 * (phi[k, f - 1] + phi[k, f])
-            Gamma[f - 1] = m.activity.thermodynamic_factor(
-                m.mole_fractions(phi_face[f - 1]))
-        return liquid_face_fluxes(phi, phi_face, Gamma, m.nu, m.D0, delta_hat,
-                                  flux, ddelta_dt, liquid.faces, liquid.step)
+        # phibar_f = (phi_{f-1} + phi_f) / 2 and dphi/dz_hat on the interior faces
+        phi_face = 0.5 * (phi[:, :-1] + phi[:, 1:])
+        gradient = numpy.diff(phi[:n]) / (delta_hat * liquid.step)
+        D = numpy.empty((liquid.n - 1, n, n))
+        for f in range(liquid.n - 1):
+            D[f] = m.fick_matrix(phi_face[:, f])
+        # [D] dphi/dz_hat on each face f: sum_k D_ik,f dphi_k/dz_hat|_f
+        diffusion = numpy.einsum("fik,kf->if", D, gradient)
+        # eta_f delta' phibar_f: the Landau term from the moving interface
+        landau = liquid.faces[1:-1] * ddelta_dt * phi_face[:n]
 
-    def gas_faces(self, psi, L_hat, flux, slip, ddelta_dt):
-        """G_i on the gas faces, by gas_face_fluxes."""
+        N_l = numpy.empty((n, liquid.n + 1))
+        N_l[:, 0] = 0.0
+        N_l[:, 1:-1] = -diffusion - landau
+        N_l[:, -1] = flux[:n]
+        return N_l
+
+    def gas_faces(self, phi_g, L_hat, flux, v_star_g, ddelta_dt):
+        """N_g,i on the gas faces f = 0 ... n_gas, (N, n_gas + 1), in gas volume.
+
+        N_g,f = [v*_g - delta' - (eta_f - 1) L'] phibar_g,f
+        - (1/alpha_i) dphi_g/dz_hat|_f, closed by the jump balance at the interface
+        and by the held ambient phi_g outside.
+        """
+        num_components = self.mixture.n
+        alpha = self.mixture.alpha
+        theta = self.mixture.theta
         gas = self.gas_grid
-        return gas_face_fluxes(psi, L_hat, flux, slip, ddelta_dt,
-                               self.mixture.alpha, self.psi_ambient,
-                               gas.faces, gas.start, gas.step)
+        dL_dt = -ddelta_dt              # the outer edge is fixed in the laboratory
 
+        # phibar_g,f and dphi_g/dz_hat on the interior faces
+        phi_g_face = 0.5 * (phi_g[:, :-1] + phi_g[:, 1:])
+        gradient = numpy.diff(phi_g) / (L_hat * gas.step)
+        drift = ((v_star_g - ddelta_dt - (gas.faces[1:-1] - gas.start) * dL_dt)
+                 * phi_g_face)
+
+        N_g = numpy.empty((num_components, gas.n + 1))
+        # eta = 1: the jump balance's n_i over theta_i, from pure liquid to gas volume
+        N_g[:, 0] = flux / theta
+        N_g[:, 1:-1] = drift - gradient / alpha[:, numpy.newaxis]
+        # eta = 2: the same face flux, one-sided against the held ambient phi_g;
+        # the edge is fixed, so the drift there is v*_g itself
+        N_g[:, -1] = (v_star_g * self.phi_g_ambient
+                      - (self.phi_g_ambient - phi_g[:, -1])
+                      / (alpha * 0.5 * L_hat * gas.step))
+        return N_g
+
+    # --- rate of change -------------------------------------------------------
     def rhs(self, t, y):
         """d(state)/dt_hat.  t does not appear: nothing is driven externally."""
-        N, n = self.mixture.n, self.mixture.n - 1
         liquid, gas = self.liquid_grid, self.gas_grid
-        phi, psi, delta_hat, L_hat = self.fields(y)
-        _, flux, slip, ddelta_dt = self.interface(phi[:, -1], psi[:, 0],
-                                                 delta_hat, L_hat)
-        # d(delta_hat phi_i)/dt_hat = -dF/deta, d(L_hat psi_i)/dt_hat = -dG/deta
-        F = self.liquid_faces(phi, delta_hat, flux, ddelta_dt)
-        G = self.gas_faces(psi, L_hat, flux, slip, ddelta_dt)
+        phi, phi_g, delta_hat, L_hat = self.fields(y)
+        _, flux, v_star_g, ddelta_dt = self.interface(phi[:, -1], phi_g[:, 0],
+                                                      delta_hat, L_hat)
 
-        # du_c/dt_hat = -(F_c - F_{c-1}) / deta, and the same in the gas
-        dy = numpy.empty(self.size)
-        for i in range(n):
-            for c in range(liquid.n):
-                dy[i * liquid.n + c] = -(F[i, c + 1] - F[i, c]) / liquid.step
-        for i in range(N):
-            for c in range(gas.n):
-                dy[self.liquid_end + i * gas.n + c] = (-(G[i, c + 1] - G[i, c])
-                                                       / gas.step)
-        dy[self.delta_index] = ddelta_dt
-        return dy
+        # d(delta_hat phi_i)/dt_hat = -dN_l/deta, d(L_hat phi_g_i)/dt_hat = -dN_g/deta
+        N_l = self.liquid_faces(phi, delta_hat, flux, ddelta_dt)
+        N_g = self.gas_faces(phi_g, L_hat, flux, v_star_g, ddelta_dt)
+
+        # du_c/dt_hat = -(N_l,c - N_l,c-1) / deta, and the same in the gas,
+        # each stacked component by component as in the state; d(delta_hat)/dt_hat
+        # = delta' closes it, so delta_hat takes the same implicit step
+        du_dt = -numpy.diff(N_l) / liquid.step
+        dw_dt = -numpy.diff(N_g) / gas.step
+        return numpy.concatenate((du_dt.ravel(), dw_dt.ravel(), [ddelta_dt]))

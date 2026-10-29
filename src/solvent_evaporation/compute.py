@@ -4,6 +4,7 @@ import time
 from dataclasses import dataclass
 
 import numpy
+import scipy
 
 
 def show_progress(k, n_steps, t_hat, delta_hat, started):
@@ -25,7 +26,7 @@ class Result:
     t: numpy.ndarray
     delta: numpy.ndarray
     phi: numpy.ndarray             # liquid volume fractions
-    psi: numpy.ndarray             # vapour, liquid-equivalent
+    phi_g: numpy.ndarray           # gas volume fractions
     phi_interface: numpy.ndarray
     flux: numpy.ndarray            # evaporative flux n_i
 
@@ -38,31 +39,24 @@ class Result:
         return self.model.gas_grid.centers
 
 
-def jacobian(model, t, y, f0, eps=1e-7):
-    """df/dy by forward differences about y, where f0 = f(t, y) already is.
-    """
-    J = numpy.empty((y.size, y.size))
-    for i in range(y.size):
-        h = eps * abs(y[i])
-        if h == 0.0:
-            h = eps
-        perturbed = y.copy()
-        perturbed[i] = y[i] + h
-        h = perturbed[i] - y[i]
-        J[:, i] = (model.rhs(t, perturbed) - f0) / h
-    return J
+def jacobian(model, t, y, eps=1e-7):
+    """df/dy by forward differences about y, delta_hat included."""
+    # relative step eps |y_i|, or eps itself where y_i = 0
+    h = eps * numpy.abs(y)
+    h[h == 0.0] = eps
+    return scipy.optimize.approx_fprime(
+        y, lambda perturbed: model.rhs(t, perturbed), h)
 
 
 def backward_euler_step(model, t, y, h):
     """The state at t + h, by the semi-implicit Euler step of Numerical Recipes.
 
-    y_next = y + h [1 - h df/dy]^-1 . f(y)
+    y_next = y + h [1 - h df/dy]^-1 . f(y), with delta_hat the last entry of y,
+    so the film thickness takes the same step as the liquid and gas phases.
     """
     f = model.rhs(t, y)
-    dfdy = jacobian(model, t, y, f)
- 
-    inverse = numpy.linalg.inv(numpy.eye(y.size) - h * dfdy)
-    return y + h * numpy.matmul(inverse, f)
+    dfdy = jacobian(model, t, y)
+    return y + h * numpy.linalg.solve(numpy.eye(y.size) - h * dfdy, f)
 
 
 def compute(model, t_end, dt, store_period=1, progress=0):
@@ -104,15 +98,14 @@ def post_process(model, t, states):
     nt = t.size
     delta = numpy.empty(nt)
     phi = numpy.empty((m.n, model.liquid_grid.n, nt))
-    psi = numpy.empty((m.n, model.gas_grid.n, nt))
+    phi_g = numpy.empty((m.n, model.gas_grid.n, nt))
     phi_interface = numpy.empty((m.n, nt))
     flux = numpy.empty((m.n, nt))
 
     for c in range(nt):
-        fields = model.fields(states[:, c])
-        phi[..., c], psi[..., c], delta[c], L_hat = fields
+        phi[..., c], phi_g[..., c], delta[c], L_hat = model.fields(states[:, c])
         phi_interface[:, c], flux[:, c], _, _ = model.interface(
-            phi[:, -1, c], psi[:, 0, c], delta[c], L_hat)
+            phi[:, -1, c], phi_g[:, 0, c], delta[c], L_hat)
 
-    return Result(model=model, t=t, delta=delta, phi=phi, psi=psi,
+    return Result(model=model, t=t, delta=delta, phi=phi, phi_g=phi_g,
                   phi_interface=phi_interface, flux=flux)
