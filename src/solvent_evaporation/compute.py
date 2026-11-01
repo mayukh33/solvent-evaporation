@@ -80,13 +80,13 @@ def compute(model, t_end, dt, store_period=1, progress=0, delta_end=None):
 
 
 def post_process(model, t, states):
-    m = model.mixture
+    num_components = 2
     nt = t.size
     delta = numpy.empty(nt)
-    phi = numpy.empty((m.n, model.liquid_grid.n + 1, nt))
-    phi_g = numpy.empty((m.n, model.gas_grid.n + 1, nt))
-    phi_interface = numpy.empty((m.n, nt))
-    flux = numpy.empty((m.n, nt))
+    phi = numpy.empty((num_components, model.liquid_grid.n + 1, nt))
+    phi_g = numpy.empty((num_components, model.gas_grid.n + 1, nt))
+    phi_interface = numpy.empty((num_components, nt))
+    flux = numpy.empty((num_components, nt))
 
     for c in range(nt):
         phi[..., c], phi_g[..., c], delta[c], _ = model.fields(states[:, c])

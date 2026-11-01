@@ -1,5 +1,4 @@
 import numpy
-from . import diffusion
 
 
 class Ideal:
@@ -7,11 +6,10 @@ class Ideal:
         return numpy.zeros_like(x)
 
     def thermodynamic_factor(self, x):
-        return numpy.eye(x.size - 1)
+        return numpy.ones_like(x[0])
 
     def excess_volume(self, x):
-        zero = numpy.zeros_like(x[0])
-        return zero, zero, zero
+        return 0.0, 0.0, 0.0
 
 
 class Margules:
@@ -25,8 +23,7 @@ class Margules:
 
     def thermodynamic_factor(self, x):
         x1, x2 = x
-        return numpy.array([[1.0 - 2 * x1 * x2 * (self.A12 * (2 * x2 - x1)
-                                                   + self.A21 * (2 * x1 - x2))]])
+        return 1.0 - 2 * x1 * x2 * (self.A12 * (2 * x2 - x1) + self.A21 * (2 * x1 - x2))
 
 class SoaveRedlichKwong:
     def __init__(self, R, T, P, v_ref, a, b, l=0.0, l_b=0.0):
@@ -113,57 +110,21 @@ class SoaveRedlichKwong:
 
     def thermodynamic_factor(self, x):
         _, _, G_xx = self.excess_gibbs(x)
-        return numpy.array([[1.0 + x[0] * x[1] * G_xx]])
+        return 1.0 + x[0] * x[1] * G_xx
 
 
 class Mixture:
     def __init__(self, phi_g_sat, alpha, theta, V_bar, D0, excess_volume,
-                 activity=None, names=None):
+                 activity=None):
         self.phi_g_sat = numpy.asarray(phi_g_sat, dtype=float)
         self.alpha = numpy.asarray(alpha, dtype=float)
         self.theta = numpy.asarray(theta, dtype=float)
         self.V_bar = numpy.asarray(V_bar, dtype=float)
         self.D0 = numpy.asarray(D0, dtype=float)
-        self.n = self.phi_g_sat.size
-        if self.n != 2:
-            raise ValueError(f"Give two "
-                             f"solvents, not {self.n}")
+        if self.phi_g_sat.size != 2:
+            raise ValueError(f"Give two solvents, not {self.phi_g_sat.size}")
         self.activity = Ideal() if activity is None else activity
         self.excess_volume = Ideal() if excess_volume is None else excess_volume
-
-        if names is None:
-            names = [f"component {i + 1}" for i in range(self.n)]
-        self.names = list(names)
-        if len(self.names) != self.n or len(set(self.names)) != self.n:
-            raise ValueError(f"give {self.n} distinct component names, "
-                             f"not {self.names}")
-        self.components = self.names[:-1]
-        self.balance = self.names[-1]
-
-    def volume_fractions(self, components, tol=1e-12):
-        if set(components) != set(self.components):
-            raise ValueError(f"give the independent components "
-                             f"{self.components}, not {list(components)}")
-        phi = {}
-        for name in self.components:
-            phi[name] = numpy.asarray(components[name], dtype=float)
-
-        phi[self.balance] = 1.0
-        for name in self.components:
-            phi[self.balance] -= phi[name]
-
-        total = 0.0
-        for name in self.names:
-            total += phi[name]
-        error = numpy.max(numpy.abs(total - 1.0))
-        if not error <= tol:
-            raise ValueError(f"volume fractions of {' + '.join(self.names)} "
-                             f"do not sum to one: off by {error:.3g}")
-
-        result = numpy.empty((self.n,) + numpy.shape(phi[self.balance]))
-        for i, name in enumerate(self.names):
-            result[i] = phi[name]
-        return result
 
     def molar_volume(self, x):
         V = x[0] * self.V_bar[0] + x[1] * self.V_bar[1]
@@ -198,6 +159,6 @@ class Mixture:
     def vapour_fraction_x(self, x):
         return self.phi_g_sat * numpy.exp(self.activity.ln_gamma(x)) * x
 
-    def fick_matrix_x(self, x):
-        D_MS = diffusion.maxwell_stefan_diffusivities(x, self.D0)[0, 1]
+    def diffusivity_x(self, x):
+        D_MS = self.D0[1] ** x[0] * self.D0[0] ** x[1]
         return D_MS * self.activity.thermodynamic_factor(x)
