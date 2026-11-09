@@ -13,22 +13,27 @@ class Ideal:
 
 
 class Margules:
-    def __init__(self, A12, A21):
-        self.A12, self.A21 = float(A12), float(A21)
+    def __init__(self, M_A, M_B):
+        # A_12 is M_A and A_21 is M_B
+        self.M_A, self.M_B = float(M_A), float(M_B)
 
     def ln_gamma(self, x):
-        x1, x2 = x
-        return numpy.array([x2 ** 2 * (self.A12 + 2 * (self.A21 - self.A12) * x1),
-                            x1 ** 2 * (self.A21 + 2 * (self.A12 - self.A21) * x2)])
+        x_A, x_B = x
+        return numpy.array([x_B ** 2 * (self.M_A + 2 * (self.M_B - self.M_A) * x_A),
+                            x_A ** 2 * (self.M_B + 2 * (self.M_A - self.M_B) * x_B)])
 
     def thermodynamic_factor(self, x):
-        x1, x2 = x
-        return 1.0 - 2 * x1 * x2 * (self.A12 * (2 * x2 - x1) + self.A21 * (2 * x1 - x2))
+        x_A, x_B = x
+        return 1.0 - 2 * x_A * x_B * (self.M_A * (2 * x_B - x_A) + self.M_B * (2 * x_A - x_B))
 
 class SoaveRedlichKwong:
-    def __init__(self, R, T, P, v_ref, a, b, l=0.0, l_b=0.0):
+    def __init__(self, R, T, P, v_ref, T_c, P_c, omega, l=0.0, l_b=0.0):
         self.RT, self.P, self.v_ref = float(R) * float(T), float(P), float(v_ref)
-        a, b = numpy.asarray(a, dtype=float), numpy.asarray(b, dtype=float)
+        T_c, P_c, omega = numpy.asarray([T_c, P_c, omega], dtype=float)
+        alpha_SRK = (1.0 + (0.480 + 1.574 * omega - 0.176 * omega ** 2)
+                     * (1.0 - numpy.sqrt(T / T_c))) ** 2
+        a = 0.42748 * alpha_SRK * (R * T_c) ** 2 / P_c
+        b = 0.08664 * R * T_c / P_c
         a_AB = (1.0 - l) * numpy.sqrt(a[0] * a[1])
         b_AB = (1.0 - l_b) * 0.5 * (b[0] + b[1])
         self.a_ij = numpy.array([[a[0], a_AB], [a_AB, a[1]]])
@@ -50,19 +55,12 @@ class SoaveRedlichKwong:
         return a, b, a_x, b_x, a_xx, b_xx
 
     def root(self, a_tilde, beta):
-        Z = beta
-        for _ in range(100):
-            C = Z ** 3 - Z ** 2 + (a_tilde - beta - beta ** 2) * Z - a_tilde * beta
-            C_Z = 3.0 * Z ** 2 - 2.0 * Z + a_tilde - beta - beta ** 2
-            step = C / C_Z
-            Z = Z - step
-            if (numpy.abs(step) <= 1e-14 * Z).all():
-                if (Z >= 1.0 / 3.0).any():
-                    raise RuntimeError("the Soave-Redlich-Kwong cubic has no liquid "
-                                       "root below Z = 1/3")
-                return Z
-        raise RuntimeError("Newton's method for the liquid root of the "
-                           "Soave-Redlich-Kwong cubic did not converge")
+        coefficients = numpy.stack([numpy.ones_like(beta), -numpy.ones_like(beta),
+                                    a_tilde - beta - beta ** 2, -a_tilde * beta],
+                                   axis=-1).reshape(-1, 4)
+        Z = numpy.array([numpy.roots(c) for c in coefficients], dtype=complex)
+        Z = numpy.where(Z.imag == 0, Z.real, numpy.inf)
+        return Z.min(axis=1).reshape(numpy.shape(beta))
 
     def compressibility(self, x):
         a, b, a_x, b_x, a_xx, b_xx = self.mixing(x)
@@ -95,13 +93,13 @@ class SoaveRedlichKwong:
         Z, Z_x, _ = self.compressibility(x)
         xi = b * self.P / (self.RT * Z)
         ratio, ln_1_xi = a / (b * self.RT), numpy.log1p(xi)
-        A_x, B_x = a_x / a, b_x / b
+        ln_a_x, ln_b_x = a_x / a, b_x / b
         G = self.residual_gibbs(a, b, Z) - x[0] * self.G_R_pure[0] - x[1] * self.G_R_pure[1]
-        G_x = ((Z - 1.0) * B_x - ratio * ln_1_xi * (A_x - B_x)
+        G_x = ((Z - 1.0) * ln_b_x - ratio * ln_1_xi * (ln_a_x - ln_b_x)
                - (self.G_R_pure[0] - self.G_R_pure[1]))
-        G_xx = (Z_x * B_x + (Z - 1.0) * (b_xx / b - B_x ** 2)
-                - ratio * ln_1_xi * (a_xx / a - b_xx / b - 2.0 * B_x * (A_x - B_x))
-                - ratio * xi / (1.0 + xi) * (B_x - Z_x / Z) * (A_x - B_x))
+        G_xx = (Z_x * ln_b_x + (Z - 1.0) * (b_xx / b - ln_b_x ** 2)
+                - ratio * ln_1_xi * (a_xx / a - b_xx / b - 2.0 * ln_b_x * (ln_a_x - ln_b_x))
+                - ratio * xi / (1.0 + xi) * (ln_b_x - Z_x / Z) * (ln_a_x - ln_b_x))
         return G, G_x, G_xx
 
     def ln_gamma(self, x):
@@ -127,23 +125,23 @@ class Mixture:
         self.excess_volume = Ideal() if excess_volume is None else excess_volume
 
     def molar_volume(self, x):
-        V = x[0] * self.V_bar[0] + x[1] * self.V_bar[1]
-        dV = self.V_bar[0] - self.V_bar[1]
-        V_E, dV_E, d2V_E = self.excess_volume.excess_volume(x)
-        return V + V_E, dV + dV_E, d2V_E
+        V_id = x[0] * self.V_bar[0] + x[1] * self.V_bar[1]
+        V_id_x = self.V_bar[0] - self.V_bar[1]
+        V_E, V_E_x, V_E_xx = self.excess_volume.excess_volume(x)
+        return V_id + V_E, V_id_x + V_E_x, V_E_xx
 
     def partial_volumes(self, x):
-        V, dV, _ = self.molar_volume(x)
-        return numpy.array([V + x[1] * dV, V - x[0] * dV])
+        V, V_x, _ = self.molar_volume(x)
+        return numpy.array([V + x[1] * V_x, V - x[0] * V_x])
 
     def mole_fractions_phi(self, phi_A, x_A):
         phi_A = numpy.asarray(phi_A, dtype=float)
         x_A = numpy.array(x_A, dtype=float)
         for _ in range(100):
             x = numpy.array([x_A, 1.0 - x_A])
-            V, _, d2V = self.molar_volume(x)
+            V, _, V_xx = self.molar_volume(x)
             nu_A, nu_B = self.partial_volumes(x)
-            slope = (nu_A * nu_B + x_A * (1.0 - x_A) * V * d2V) / V ** 2
+            slope = (nu_A * nu_B + x_A * (1.0 - x_A) * V * V_xx) / V ** 2
             step = (x_A * nu_A / V - phi_A) / slope
             x_A = x_A - step
             if numpy.abs(step).max() < 1e-15:
@@ -151,9 +149,9 @@ class Mixture:
         raise RuntimeError(f"Newton's method for x_A did not converge at phi_A = {phi_A}")
 
     def s_x(self, x):
-        V, _, d2V = self.molar_volume(x)
+        V, _, V_xx = self.molar_volume(x)
         nu_A, nu_B = self.partial_volumes(x)
-        curvature = x[0] * x[1] * V * d2V
+        curvature = x[0] * x[1] * V * V_xx
         return curvature / (nu_A * nu_B + curvature)
 
     def vapour_fraction_x(self, x):
