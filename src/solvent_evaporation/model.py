@@ -29,16 +29,16 @@ class EvaporationModel:
         phi_cast = self.x0 * m.partial_volumes(self.x0) / m.molar_volume(self.x0)[0]
         self.x_nodes = numpy.full(self.liquid_grid.n + 1, self.x0[0])
         self.x_faces = numpy.full(self.liquid_grid.n, self.x0[0])
-        return self.pack(numpy.full(self.liquid_grid.n + 1, phi_cast[0]),
-                         numpy.outer(self.phi_g_ambient, numpy.ones(self.gas_grid.n - 1)),
-                         1.0)
+        return self.state(phi=numpy.full(self.liquid_grid.n + 1, phi_cast[0]),
+                          phi_g=numpy.outer(self.phi_g_ambient,
+                                            numpy.ones(self.gas_grid.n - 1)),
+                          delta_hat=1.0)
 
-    def pack(self, phi, phi_g, delta_hat):
-        L_hat = self.b_hat - delta_hat
-        return numpy.concatenate((phi, (L_hat * phi_g).ravel(), [delta_hat]))
-
-    def unpack(self, y):
+    def state(self, y=None, *, phi=None, phi_g=None, delta_hat=None):
         num_components = 2
+        if y is None:
+            L_hat = self.b_hat - delta_hat
+            return numpy.concatenate((phi, (L_hat * phi_g).ravel(), [delta_hat]))
         delta_hat = y[self.delta_index]
         L_hat = self.b_hat - delta_hat
         phi = y[:self.liquid_end]
@@ -48,7 +48,7 @@ class EvaporationModel:
 
     def fields(self, y):
         m = self.mixture
-        phi, phi_g, delta_hat, L_hat = self.unpack(y)
+        phi, phi_g, delta_hat, L_hat = self.state(y)
         x = self.liquid_nodes(phi)[0]
         phi_g_node = numpy.column_stack((m.vapour_fraction_x(x[:, -1]), phi_g,
                                          self.phi_g_ambient))
@@ -137,7 +137,7 @@ class EvaporationModel:
         return flux, slip, relative, F_s, j_s, dphi_s
 
     def surface(self, y):
-        phi, phi_g, delta_hat, L_hat = self.unpack(y)
+        phi, phi_g, delta_hat, L_hat = self.state(y)
         x, nu, s, D = self.liquid_nodes(phi)
         flux = self.interface(
             x[:, -1], phi[-1], nu[:, -1], s[-1], D[-1], phi_g[:, 0], delta_hat, L_hat)[0]
@@ -145,7 +145,7 @@ class EvaporationModel:
         return phi_s, flux
 
     def rhs(self, t, y):
-        phi, phi_g, delta_hat, L_hat = self.unpack(y)
+        phi, phi_g, delta_hat, L_hat = self.state(y)
         x, nu, s, D = self.liquid_nodes(phi)
         phi_face, s_face, j_face = self.liquid_faces(phi, delta_hat)
         flux, slip, relative, F_s, j_s, dphi_s = self.interface(
