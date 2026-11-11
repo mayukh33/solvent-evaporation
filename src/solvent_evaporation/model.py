@@ -17,8 +17,6 @@ class EvaporationModel:
                               else numpy.asarray(phi_g_ambient, dtype=numpy.float64))
         self.liquid_grid = liquid_grid
         self.gas_grid = gas_grid
-        self.x_nodes = numpy.full(self.liquid_grid.n + 1, self.x0[0])
-        self.x_faces = numpy.full(self.liquid_grid.n, self.x0[0])
 
         self.liquid_end = (num_components - 1) * (self.liquid_grid.n + 1)
         self.delta_index = self.liquid_end + num_components * (self.gas_grid.n - 1)
@@ -27,8 +25,6 @@ class EvaporationModel:
     def initial_state(self):
         m = self.mixture
         phi_cast = self.x0 * m.partial_volumes(self.x0) / m.molar_volume(self.x0)[0]
-        self.x_nodes = numpy.full(self.liquid_grid.n + 1, self.x0[0])
-        self.x_faces = numpy.full(self.liquid_grid.n, self.x0[0])
         return self.state(phi=numpy.full(self.liquid_grid.n + 1, phi_cast[0]),
                           phi_g=numpy.outer(self.phi_g_ambient,
                                             numpy.ones(self.gas_grid.n - 1)),
@@ -56,15 +52,13 @@ class EvaporationModel:
 
     def liquid_nodes(self, phi):
         m = self.mixture
-        x = m.mole_fractions_phi(phi, self.x_nodes)
-        self.x_nodes = x[0, :]
+        x = m.mole_fractions_phi(phi, x_A_initial=m.ideal_mole_fraction(phi))
         return x, m.partial_volumes(x), m.s_x(x), m.diffusivity_x(x)
 
     def liquid_faces(self, phi, delta_hat):
         m = self.mixture
         phi_face = 0.5 * (phi[:-1] + phi[1:])
-        x = m.mole_fractions_phi(phi_face, self.x_faces)
-        self.x_faces = x[0, :]
+        x = m.mole_fractions_phi(phi_face, x_A_initial=m.ideal_mole_fraction(phi_face))
         s = m.s_x(x)
         D = m.diffusivity_x(x)
         j_A = -D / delta_hat * (1.0 - s) * numpy.diff(phi) / self.liquid_grid.step

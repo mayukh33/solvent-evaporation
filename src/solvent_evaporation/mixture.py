@@ -1,4 +1,5 @@
 import numpy
+import scipy
 
 
 class Ideal:
@@ -134,19 +135,22 @@ class Mixture:
         V, V_x, _ = self.molar_volume(x)
         return numpy.array([V + x[1] * V_x, V - x[0] * V_x])
 
-    def mole_fractions_phi(self, phi_A, x_A):
-        phi_A = numpy.asarray(phi_A, dtype=float)
-        x_A = numpy.array(x_A, dtype=float)
-        for _ in range(100):
+    def ideal_mole_fraction(self, phi_A):
+        C = numpy.array([phi_A / self.V_bar[0], (1.0 - phi_A) / self.V_bar[1]])
+        return C[0] / C.sum(axis=0)
+
+    def mole_fractions_phi(self, phi_A, x_A_initial):
+        def phi_A_error(x_A):
             x = numpy.array([x_A, 1.0 - x_A])
-            V, _, V_xx = self.molar_volume(x)
-            nu_A, nu_B = self.partial_volumes(x)
-            slope = (nu_A * nu_B + x_A * (1.0 - x_A) * V * V_xx) / V ** 2
-            step = (x_A * nu_A / V - phi_A) / slope
-            x_A = x_A - step
-            if numpy.abs(step).max() < 1e-15:
-                return numpy.array([x_A, 1.0 - x_A])
-        raise RuntimeError(f"Newton's method for x_A did not converge at phi_A = {phi_A}")
+            V, _, _ = self.molar_volume(x)
+            nu_A, _ = self.partial_volumes(x)
+            return x_A * nu_A / V - phi_A
+
+        if isinstance(self.excess_volume, Ideal):
+            x_A = self.ideal_mole_fraction(phi_A)
+        else:
+            x_A = scipy.optimize.newton(phi_A_error, x_A_initial, tol=1e-15)
+        return numpy.array([x_A, 1.0 - x_A])
 
     def s_x(self, x):
         V, _, V_xx = self.molar_volume(x)
