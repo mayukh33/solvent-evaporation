@@ -52,13 +52,13 @@ class EvaporationModel:
 
     def liquid_nodes(self, phi):
         m = self.mixture
-        x = m.mole_fractions_phi(phi, x_A_initial=m.ideal_mole_fraction(phi))
+        x = m.mole_fractions_phi(phi)
         return x, m.partial_volumes(x), m.s_x(x), m.diffusivity_x(x)
 
     def liquid_faces(self, phi, delta_hat):
         m = self.mixture
         phi_face = 0.5 * (phi[:-1] + phi[1:])
-        x = m.mole_fractions_phi(phi_face, x_A_initial=m.ideal_mole_fraction(phi_face))
+        x = m.mole_fractions_phi(phi_face)
         s = m.s_x(x)
         D = m.diffusivity_x(x)
         j_A = -D / delta_hat * (1.0 - s) * numpy.diff(phi) / self.liquid_grid.step

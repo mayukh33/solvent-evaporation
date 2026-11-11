@@ -139,17 +139,16 @@ class Mixture:
         C = numpy.array([phi_A / self.V_bar[0], (1.0 - phi_A) / self.V_bar[1]])
         return C[0] / C.sum(axis=0)
 
-    def mole_fractions_phi(self, phi_A, x_A_initial):
+    def mole_fractions_phi(self, phi_A):
         def phi_A_error(x_A):
             x = numpy.array([x_A, 1.0 - x_A])
             V, _, _ = self.molar_volume(x)
             nu_A, _ = self.partial_volumes(x)
             return x_A * nu_A / V - phi_A
 
-        if isinstance(self.excess_volume, Ideal):
-            x_A = self.ideal_mole_fraction(phi_A)
-        else:
-            x_A = scipy.optimize.newton(phi_A_error, x_A_initial, tol=1e-15)
+        x_A = self.ideal_mole_fraction(phi_A)
+        if not isinstance(self.excess_volume, Ideal):
+            x_A = scipy.optimize.newton(phi_A_error, x_A, tol=1e-15)
         return numpy.array([x_A, 1.0 - x_A])
 
     def s_x(self, x):
