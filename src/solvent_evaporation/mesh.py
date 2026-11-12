@@ -2,8 +2,6 @@ import numpy
 
 
 class Grid:
-    """n uniform cells; give `n` or `step`, which rounds to whole cells."""
-
     def __init__(self, n=None, step=None, start=0.0):
         if step is not None:
             n = numpy.max((2, numpy.round(1.0 / step))).astype(numpy.int64)

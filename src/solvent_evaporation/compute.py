@@ -1,13 +1,11 @@
-"""Fixed-step backward Euler."""
-
 import time
 from dataclasses import dataclass
 
 import numpy
+import scipy
 
 
 def show_progress(k, n_steps, t_hat, delta_hat, started):
-    """One line, rewritten in place: bar, position, and time left."""
     done = k / n_steps
     elapsed = time.perf_counter() - started
     filled = int(30 * done)
@@ -19,100 +17,80 @@ def show_progress(k, n_steps, t_hat, delta_hat, started):
 
 @dataclass
 class Result:
-    """Simulation output, all scaled.  Profiles are [component, cell, time]."""
-
     model: object
     t: numpy.ndarray
     delta: numpy.ndarray
-    phi: numpy.ndarray             # liquid volume fractions
-    psi: numpy.ndarray             # vapour, liquid-equivalent
+    phi: numpy.ndarray
+    phi_g: numpy.ndarray
     phi_interface: numpy.ndarray
-    flux: numpy.ndarray            # evaporative flux n_i
+    flux: numpy.ndarray
 
     @property
     def eta_liquid(self):
-        return self.model.liquid_grid.centers
+        return self.model.liquid_grid.faces
 
     @property
     def eta_gas(self):
-        return self.model.gas_grid.centers
+        return self.model.gas_grid.faces
 
 
-def jacobian(model, t, y, f0, eps=1e-7):
-    """df/dy by forward differences about y, where f0 = f(t, y) already is.
-    """
-    J = numpy.empty((y.size, y.size))
-    for i in range(y.size):
-        h = eps * abs(y[i])
-        if h == 0.0:
-            h = eps
-        perturbed = y.copy()
-        perturbed[i] = y[i] + h
-        h = perturbed[i] - y[i]
-        J[:, i] = (model.rhs(t, perturbed) - f0) / h
-    return J
+def jacobian(model, t, y, eps=1e-7):
+    h = eps * numpy.abs(y)
+    h[h == 0.0] = eps
+    return scipy.optimize.approx_fprime(
+        y, lambda perturbed: model.rhs(t, perturbed), h)
 
 
 def backward_euler_step(model, t, y, h):
-    """The state at t + h, by the semi-implicit Euler step of Numerical Recipes.
-
-    y_next = y + h [1 - h df/dy]^-1 . f(y)
-    """
     f = model.rhs(t, y)
-    dfdy = jacobian(model, t, y, f)
- 
-    inverse = numpy.linalg.inv(numpy.eye(y.size) - h * dfdy)
-    return y + h * numpy.matmul(inverse, f)
+    dfdy = jacobian(model, t, y)
+    return y + h * numpy.linalg.solve(numpy.eye(y.size) - h * dfdy, f)
 
 
-def compute(model, t_end, dt, store_period=1, progress=0):
-    """March from t_hat = 0 to t_end in steps of exactly dt."""
+def compute(model, t_end, dt, store_period=1, progress=0, delta_end=None):
     n_steps = numpy.max((1, numpy.round(t_end / dt))).astype(numpy.int64)
 
-    keep = numpy.unique(numpy.append(numpy.arange(0, n_steps + 1, store_period),
-                                     n_steps))
-    states = numpy.empty((model.size, keep.size))
-
     y = model.initial_state()
-    states[:, 0] = y
-    kept = 1
-
+    stored = {0: y}
     started = time.perf_counter()
     try:
         for k in range(1, n_steps + 1):
-            # (k - 1) * dt, not a running sum, which drifts over many steps.
             y = backward_euler_step(model, (k - 1) * dt, y, dt)
-            if kept < keep.size and k == keep[kept]:
-                states[:, kept] = y
-                kept += 1
+            thin = delta_end is not None and y[model.delta_index] <= delta_end
+            if k % store_period == 0 or k == n_steps or thin:
+                stored[k] = y
             if progress and k % progress == 0:
                 show_progress(k, n_steps, k * dt, y[model.delta_index], started)
+            if thin:
+                break
     except KeyboardInterrupt:
         print(f"\ninterrupted at step {k} of {n_steps} (t_hat = {k * dt:.6g}); "
-              f"returning {kept} stored times, to t_hat = "
-              f"{keep[kept - 1] * dt:.6g}")
+              f"returning {len(stored)} stored times, to t_hat = "
+              f"{max(stored) * dt:.6g}")
     else:
         if progress:
             print()
+        if thin:
+            print(f"delta_hat = {y[model.delta_index]:.6g} <= {delta_end:g} at step "
+                  f"{k} of {n_steps} (t_hat = {k * dt:.6g}); stopped there, "
+                  f"returning {len(stored)} stored times")
 
-    return post_process(model, keep[:kept] * dt, states[:, :kept])
+    steps = numpy.array(list(stored))
+    return post_process(model, steps * dt, numpy.column_stack(list(stored.values())))
 
 
 def post_process(model, t, states):
-    """Split each stored state into profiles and interface values."""
-    m = model.mixture
+    num_components = 2
     nt = t.size
     delta = numpy.empty(nt)
-    phi = numpy.empty((m.n, model.liquid_grid.n, nt))
-    psi = numpy.empty((m.n, model.gas_grid.n, nt))
-    phi_interface = numpy.empty((m.n, nt))
-    flux = numpy.empty((m.n, nt))
+    phi = numpy.empty((num_components, model.liquid_grid.n + 1, nt))
+    phi_g = numpy.empty((num_components, model.gas_grid.n + 1, nt))
+    phi_interface = numpy.empty((num_components, nt))
+    flux = numpy.empty((num_components, nt))
 
     for c in range(nt):
-        fields = model.fields(states[:, c])
-        phi[..., c], psi[..., c], delta[c], L_hat = fields
-        phi_interface[:, c], flux[:, c], _, _ = model.interface(
-            phi[:, -1, c], psi[:, 0, c], delta[c], L_hat)
+        phi[..., c], phi_g[..., c], delta[c], _ = model.fields(states[:, c])
+        phi_interface[:, c], flux[:, c] = model.surface(states[:, c])
 
-    return Result(model=model, t=t, delta=delta, phi=phi, psi=psi,
+    return Result(model=model, t=t, delta=delta, phi=phi, phi_g=phi_g,
                   phi_interface=phi_interface, flux=flux)
