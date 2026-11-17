@@ -4,9 +4,9 @@ import scipy
 from solvent_evaporation import EvaporationModel, Grid, Margules, Mixture, SoaveRedlichKwong
    
 
-def test_flux_ideal(ethanol_water, sine):
+def test_flux_ideal(binary, sine):
     
-    _, _, P, _, D0, V_bar, theta = ethanol_water
+    _, _, P, _, D0, V_bar, theta = binary
     n, delta_hat, intercept, coefficient, phi, eta_face, phi_face_exact = sine
 
     def flux(eta):
@@ -17,8 +17,8 @@ def test_flux_ideal(ethanol_water, sine):
         return (-(D_AB / delta_hat) * 2 * numpy.pi * coefficient
                 * numpy.cos(2 * numpy.pi * eta))
 
-    mixture = Mixture(phi_g_sat=numpy.array([7869.0, 3169.9]) / P,
-                      alpha=1.24e-9 / numpy.array([1.29e-5, 2.54e-5]),
+    mixture = Mixture(phi_g_sat=numpy.array([1.0e4, 5.0e3]) / P,
+                      alpha=1.0 / numpy.array([2.0, 4.0]),
                       theta=theta, V_bar=V_bar, D0=D0,
                       activity=None, excess_volume=None)
     model = EvaporationModel(mixture, [0.5, 0.5], b_hat=2.0, liquid_grid=Grid(n=n),
@@ -30,16 +30,13 @@ def test_flux_ideal(ethanol_water, sine):
     assert numpy.allclose(phi_face, phi_face_exact)
     assert numpy.allclose(j_A, j_A_exact)
 
-def test_flux_non_ideal(ethanol_water, sine):
-    # Calculation of the non-ideal flux for a sine volume fraction field 
-    R, T, P, v, D0, V_bar, theta = ethanol_water
+def test_flux_non_ideal(binary, srk_constants, sine):
+    # Calculation of the non-ideal flux for a sine volume fraction field
+    R, T, P, v, D0, V_bar, theta = binary
+    T_c, P_c, omega, l_AB, l_b_AB, _ = srk_constants
     n, delta_hat, intercept, coefficient, phi, eta_face, phi_face_exact = sine
     RT = R * T
-    T_c = numpy.array([513.9, 647.1])
-    P_c = numpy.array([61.48e5, 220.55e5])
-    omega = numpy.array([0.645, 0.345])
-    l_AB, l_b_AB = -0.07865, 0.03972
-    M_A, M_B = 1.5168, 0.9785
+    M_A, M_B = 0.5, 0.3
 
     alpha_SRK = (1.0 + (0.480 + 1.574 * omega - 0.176 * omega ** 2)
                  * (1.0 - numpy.sqrt(T / T_c))) ** 2
@@ -51,8 +48,10 @@ def test_flux_non_ideal(ethanol_water, sine):
     b_ij = numpy.array([[b[0], b_AB], [b_AB, b[1]]])
 
     def mixing(m, x_A):
-        y, y_x = numpy.array([x_A, 1.0 - x_A]), numpy.array([1.0, -1.0])
-        return y @ m @ y, 2 * y_x @ m @ y, 2 * y_x @ m @ y_x
+        x_B = 1.0 - x_A
+        return (x_A ** 2 * m[0, 0] + 2 * x_A * x_B * m[0, 1] + x_B ** 2 * m[1, 1],
+                2 * (x_A * m[0, 0] + (x_B - x_A) * m[0, 1] - x_B * m[1, 1]),
+                2 * (m[0, 0] - 2 * m[0, 1] + m[1, 1]))
 
     def root(x_A):
         a_tilde, beta = mixing(a_ij, x_A)[0] * P / RT ** 2, mixing(b_ij, x_A)[0] * P / RT
@@ -101,8 +100,8 @@ def test_flux_non_ideal(ethanol_water, sine):
     
     # Code generated result for the non-ideal flux using the sine volume fraction field
     srk = SoaveRedlichKwong(R, T, P, v[0], T_c, P_c, omega, l=l_AB, l_b=l_b_AB)
-    mixture = Mixture(phi_g_sat=numpy.array([7869.0, 3169.9]) / P,
-                      alpha=1.24e-9 / numpy.array([1.29e-5, 2.54e-5]),
+    mixture = Mixture(phi_g_sat=numpy.array([1.0e4, 5.0e3]) / P,
+                      alpha=1.0 / numpy.array([2.0, 4.0]),
                       theta=theta, V_bar=V_bar, D0=D0,
                       activity=Margules(M_A, M_B), excess_volume=srk)
     model = EvaporationModel(mixture, [0.5, 0.5], b_hat=2.0, liquid_grid=Grid(n=n),
