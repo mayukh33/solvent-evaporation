@@ -1,6 +1,8 @@
 import numpy
 import scipy
 
+from .cache import composition_cache
+
 
 class Ideal:
     def ln_gamma(self, x):
@@ -63,6 +65,7 @@ class SoaveRedlichKwong:
         Z = numpy.where(Z.imag == 0, Z.real, numpy.inf)
         return Z.min(axis=1).reshape(numpy.shape(beta))
 
+    @composition_cache
     def compressibility(self, x):
         a, b, a_x, b_x, a_xx, b_xx = self.mixing(x)
         to_a, to_b = self.P / self.RT ** 2, self.P / self.RT

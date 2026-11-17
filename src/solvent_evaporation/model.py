@@ -1,5 +1,6 @@
 import numpy
 
+from .cache import array_cache
 
 
 class EvaporationModel:
@@ -50,11 +51,13 @@ class EvaporationModel:
                                          self.phi_g_ambient))
         return numpy.array([phi, 1.0 - phi]), phi_g_node, delta_hat, L_hat
 
+    @array_cache
     def liquid_nodes(self, phi):
         m = self.mixture
         x = m.mole_fractions_phi(phi)
         return x, m.partial_volumes(x), m.s_x(x), m.diffusivity_x(x)
 
+    @array_cache
     def liquid_faces(self, phi, delta_hat):
         m = self.mixture
         phi_face = 0.5 * (phi[:-1] + phi[1:])
