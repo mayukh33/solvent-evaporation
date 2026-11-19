@@ -73,22 +73,15 @@ def test_flux_non_ideal(binary, srk_constants, sine):
                  - ((1 + 2 * beta) * Z + a_t) * beta_xx) / C_Z
         return Z, Z_x, Z_xx
 
-    def worked(x_A):
-        Z_A, Z_B = root(1.0), root(0.0)
-        Z, Z_x, Z_xx = slopes(x_A)
-        x_B = 1.0 - x_A
-        return (Z - x_A * (Z_A - theta[0]) - x_B * (Z_B - theta[1]),
-                Z_x - (Z_A - theta[0]) + (Z_B - theta[1]), Z_xx)
-
     def phi_x(x_A):
-        Z, Z_x, _ = worked(x_A)
+        Z, Z_x, _ = slopes(x_A)
         return x_A * (Z + (1 - x_A) * Z_x) / Z
 
     def flux(eta):
         phi = intercept + coefficient * numpy.sin(2 * numpy.pi * eta)
         x_A = scipy.optimize.brentq(lambda x: phi_x(x) - phi, 0.0, 1.0)
         x_B = 1 - x_A
-        Z, Z_x, Z_xx = worked(x_A)
+        Z, Z_x, Z_xx = slopes(x_A)
         curvature = x_A * x_B * Z * Z_xx
         s = curvature / ((Z + x_B * Z_x) * (Z - x_A * Z_x) + curvature)
         Gamma = 1 - 2 * x_A * x_B * (M_A * (2 * x_B - x_A) + M_B * (2 * x_A - x_B))
