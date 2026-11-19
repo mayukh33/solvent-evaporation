@@ -85,6 +85,11 @@ class SoaveRedlichKwong:
         beta = b * self.P / self.RT
         return Z - 1.0 - numpy.log(Z - beta) - a / (b * self.RT) * numpy.log1p(beta / Z)
 
+    def molar_volume(self, x):
+        Z, Z_x, Z_xx = self.compressibility(x)
+        to_V = self.RT / (self.P * self.v_ref)
+        return to_V * Z, to_V * Z_x, to_V * Z_xx
+
     def excess_volume(self, x):
         Z, Z_x, Z_xx = self.compressibility(x)
         to_V = self.RT / (self.P * self.v_ref)
@@ -129,10 +134,11 @@ class Mixture:
         self.excess_volume = Ideal() if excess_volume is None else excess_volume
 
     def molar_volume(self, x):
+        if not isinstance(self.excess_volume, Ideal):
+            return self.excess_volume.molar_volume(x)
         V_id = x[0] * self.V_bar[0] + x[1] * self.V_bar[1]
         V_id_x = self.V_bar[0] - self.V_bar[1]
-        V_E, V_E_x, V_E_xx = self.excess_volume.excess_volume(x)
-        return V_id + V_E, V_id_x + V_E_x, V_E_xx
+        return V_id, V_id_x, 0.0
 
     def partial_volumes(self, x):
         V, V_x, _ = self.molar_volume(x)
