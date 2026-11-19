@@ -56,7 +56,7 @@ def compute_fixed(model, t_end, dt, store_period=1, progress=0, delta_end=None):
     try:
         for k in range(1, n_steps + 1):
             y = backward_euler_step(model, (k - 1) * dt, y, dt)
-            thin = delta_end is not None and y[model.delta_index] <= delta_end
+            thin = y[model.delta_index] <= delta_end
             if k % store_period == 0 or k == n_steps or thin:
                 stored[k] = y
             if progress and k % progress == 0:
