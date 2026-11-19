@@ -5,12 +5,12 @@ import numpy
 import scipy
 
 
-def show_progress(k, n_steps, t_hat, delta_hat, started):
-    done = k / n_steps
+def show_progress(t, t_end, delta, started):
+    done = t / t_end
     elapsed = time.perf_counter() - started
     filled = int(30 * done)
     print(f"\r[{'#' * filled}{'.' * (30 - filled)}] {done:5.1%}  "
-          f"t_hat {t_hat:.4g}  delta_hat {delta_hat:.5f}  "
+          f"t_hat {t:.4g}  delta_hat {delta:.5f}  "
           f"{elapsed:5.0f}s elapsed",
           end="", flush=True)
 
@@ -35,21 +35,21 @@ class Result:
 
 
 def jacobian(model, t, y, eps=1e-7):
-    h = eps * numpy.abs(y)
-    h[h == 0.0] = eps
+    dy = eps * numpy.abs(y)
+    dy[dy == 0.0] = eps
     return scipy.optimize.approx_fprime(
-        y, lambda perturbed: model.rhs(t, perturbed), h)
+        y, lambda perturbed: model.rhs(t, perturbed), dy)
 
 
-def backward_euler_step(model, t, y, h):
+def backward_euler_step(model, t, y, dt):
     f = model.rhs(t, y)
     dfdy = jacobian(model, t, y)
-    return y + h * numpy.linalg.solve(numpy.eye(y.size) - h * dfdy, f)
+    return y + dt * numpy.linalg.solve(numpy.eye(y.size) - dt * dfdy, f)
 
 
-def compute(model, t_end, dt, store_period=1, progress=0, delta_end=None):
+def compute_fixed(model, t_end, dt, store_period=1, progress=0, delta_end=None):
     n_steps = numpy.max((1, numpy.round(t_end / dt))).astype(numpy.int64)
-
+    delta_end = 0 if delta_end is None else delta_end
     y = model.initial_state()
     stored = {0: y}
     started = time.perf_counter()
@@ -60,7 +60,7 @@ def compute(model, t_end, dt, store_period=1, progress=0, delta_end=None):
             if k % store_period == 0 or k == n_steps or thin:
                 stored[k] = y
             if progress and k % progress == 0:
-                show_progress(k, n_steps, k * dt, y[model.delta_index], started)
+                show_progress(k * dt, n_steps * dt, y[model.delta_index], started)
             if thin:
                 break
     except KeyboardInterrupt:
@@ -75,22 +75,56 @@ def compute(model, t_end, dt, store_period=1, progress=0, delta_end=None):
                   f"{k} of {n_steps} (t_hat = {k * dt:.6g}); stopped there, "
                   f"returning {len(stored)} stored times")
 
-    steps = numpy.array(list(stored))
-    return post_process(model, steps * dt, numpy.column_stack(list(stored.values())))
+    t = dt * numpy.array(list(stored))
+    return post_process(model, t, numpy.column_stack(list(stored.values())))
+
+
+def compute_adaptive(model, t_end, dt_store, rtol, atol, progress=0, delta_end=None):
+    solver = scipy.integrate.BDF(model.rhs, 0.0, model.initial_state(), t_end,
+                                 rtol=rtol, atol=atol,
+                                 jac=lambda t, y: jacobian(model, t, y))
+    t_store = dt_store * numpy.arange(1, numpy.round(t_end / dt_store) + 1)
+    delta_end = 0 if delta_end is None else delta_end
+
+    stored = {0.0: solver.y}
+    started = time.perf_counter()
+    k, message = 0, None
+    try:
+        while solver.status == "running" and solver.y[model.delta_index] > delta_end:
+            message = solver.step()
+            if message:
+                break
+            k += 1
+            due = t_store[(t_store > solver.t_old) & (t_store <= solver.t)]
+            stored.update(zip(due, solver.dense_output()(due).T))
+            if progress and k % progress == 0:
+                show_progress(solver.t, t_end, solver.y[model.delta_index], started)
+    except KeyboardInterrupt:
+        message = "interrupted"
+    stored[solver.t] = solver.y
+    if progress:
+        print()
+    if solver.status != "finished":
+        print(f"stopped at step {k} (t_hat = {solver.t:.6g}, delta_hat = "
+              f"{solver.y[model.delta_index]:.6g}): {message or 'delta_end reached'}; "
+              f"returning {len(stored)} stored times")
+
+    t = numpy.array(list(stored))
+    return post_process(model, t, numpy.column_stack(list(stored.values())))
 
 
 def post_process(model, t, states):
     num_components = 2
-    nt = t.size
-    delta = numpy.empty(nt)
-    phi = numpy.empty((num_components, model.liquid_grid.n + 1, nt))
-    phi_g = numpy.empty((num_components, model.gas_grid.n + 1, nt))
-    phi_interface = numpy.empty((num_components, nt))
-    flux = numpy.empty((num_components, nt))
+    n_times = t.size
+    delta = numpy.empty(n_times)
+    phi = numpy.empty((num_components, model.liquid_grid.n + 1, n_times))
+    phi_g = numpy.empty((num_components, model.gas_grid.n + 1, n_times))
+    phi_interface = numpy.empty((num_components, n_times))
+    flux = numpy.empty((num_components, n_times))
 
-    for c in range(nt):
-        phi[..., c], phi_g[..., c], delta[c], _ = model.fields(states[:, c])
-        phi_interface[:, c], flux[:, c] = model.surface(states[:, c])
+    for k in range(n_times):
+        phi[..., k], phi_g[..., k], delta[k], _ = model.fields(states[:, k])
+        phi_interface[:, k], flux[:, k] = model.surface(states[:, k])
 
     return Result(model=model, t=t, delta=delta, phi=phi, phi_g=phi_g,
                   phi_interface=phi_interface, flux=flux)
