@@ -123,7 +123,7 @@ def post_process(model, t, states):
     flux = numpy.empty((num_components, n_times))
 
     for k in range(n_times):
-        phi[..., k], phi_g[..., k], delta[k], _ = model.fields(states[:, k])
+        phi[:, :, k], phi_g[:, :, k], delta[k], _ = model.fields(states[:, k])
         phi_interface[:, k], flux[:, k] = model.surface(states[:, k])
 
     return Result(model=model, t=t, delta=delta, phi=phi, phi_g=phi_g,
