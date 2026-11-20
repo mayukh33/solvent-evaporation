@@ -7,14 +7,14 @@ from solvent_evaporation import Mixture, SoaveRedlichKwong
 @pytest.fixture
 def mixture(binary, srk_constants):
     R, T, P, v, _, _, _ = binary
-    T_c, P_c, omega, l_AB, l_b_AB, V_bar = srk_constants
+    T_c, P_c, omega, l_AB, l_b_AB, v_i = srk_constants
     excess_volume = SoaveRedlichKwong(R, T, P, v[0], T_c, P_c, omega,
                                       l=l_AB, l_b=l_b_AB)
     D0 = numpy.array([1.0, 3.0])                
     D_g = numpy.array([2.0, 4.0])               
     phi_g_sat = numpy.array([0.1, 0.005])       
     theta = numpy.array([1e-2, 2e-2])           
-    return Mixture(phi_g_sat=phi_g_sat, alpha=1.0 / D_g, theta=theta, V_bar=V_bar,
+    return Mixture(phi_g_sat=phi_g_sat, alpha=1.0 / D_g, theta=theta, v_i=v_i,
                    D0=D0, excess_volume=excess_volume)
 
 
@@ -23,9 +23,9 @@ def binary():
     R, T, P = 8.314462618, 300.0, 1.0e5
     v = numpy.array([5.0e-5, 2.0e-5])
     D0 = numpy.array([1.0, 2.0])
-    V_bar = v / v[0]
+    v_i = v / v[0]
     theta = v * P / (R * T)
-    return R, T, P, v, D0, V_bar, theta
+    return R, T, P, v, D0, v_i, theta
 
 
 @pytest.fixture
@@ -34,8 +34,8 @@ def srk_constants():
     P_c = numpy.array([50.0e5, 200.0e5])
     omega = numpy.array([0.5, 0.3])
     l_AB, l_b_AB = -0.05, 0.05
-    V_bar = numpy.array([1.0, 2.0])
-    return T_c, P_c, omega, l_AB, l_b_AB, V_bar
+    v_i = numpy.array([1.0, 2.0])
+    return T_c, P_c, omega, l_AB, l_b_AB, v_i
 
 
 @pytest.fixture

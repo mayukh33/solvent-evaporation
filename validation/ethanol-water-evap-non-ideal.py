@@ -36,7 +36,7 @@ srk = SoaveRedlichKwong(R, T, P_amb, v[0], T_c, P_c, omega, l=l_AB, l_b=l_b_AB)
 mixture = Mixture(phi_g_sat=p_sat / P_amb,
                   alpha=D_ref / Dg,
                   theta=v * P_amb / (R * T),
-                  V_bar=v / v[0],
+                  v_i=v / v[0],
                   D0=D0 / D_ref,
                   activity=Margules(A12, A21),
                   excess_volume=srk)
