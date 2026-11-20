@@ -1,115 +1,171 @@
 import numpy
-from . import diffusion
+import scipy
+
+from .cache import composition_cache
 
 
 class Ideal:
-    """Ideal solution.  An activity model is any object with these two methods."""
-
     def ln_gamma(self, x):
-        """ln gamma^act_i, (N,), at liquid mole fractions x (N,)."""
         return numpy.zeros_like(x)
 
     def thermodynamic_factor(self, x):
-        """[Gamma], (N-1, N-1), at mole fractions x (N,), with x_N eliminated."""
-        # Gamma_ij = delta_ij + x_i d(ln gamma^act_i)/dx_j
-        return numpy.eye(x.size - 1)
+        return numpy.ones_like(x[0])
+
+    def excess_volume(self, x):
+        return 0.0, 0.0, 0.0
 
 
 class Margules:
-    """Binary two-parameter Margules: A12 = ln gamma_1^inf, A21 = ln gamma_2^inf."""
-
-    def __init__(self, A12, A21):
-        self.A12, self.A21 = float(A12), float(A21)
+    def __init__(self, A_12, A_21):
+        self.A_12, self.A_21 = float(A_12), float(A_21)
 
     def ln_gamma(self, x):
-        """ln gamma^act_i, (2,), at liquid mole fractions x (2,)."""
-        # ln gamma_1 = x_2^2 [A12 + 2 (A21 - A12) x_1]
-        # ln gamma_2 = x_1^2 [A21 + 2 (A12 - A21) x_2]
-        x1, x2 = x
-        return numpy.array([x2 ** 2 * (self.A12 + 2 * (self.A21 - self.A12) * x1),
-                            x1 ** 2 * (self.A21 + 2 * (self.A12 - self.A21) * x2)])
+        x_A, x_B = x
+        return numpy.array([x_B ** 2 * (self.A_12 + 2 * (self.A_21 - self.A_12) * x_A),
+                            x_A ** 2 * (self.A_21 + 2 * (self.A_12 - self.A_21) * x_B)])
 
     def thermodynamic_factor(self, x):
-        """[Gamma], (1, 1), at mole fractions x (2,)."""
-        # Gamma = 1 + x_1 d(ln gamma_1)/dx_1
-        #       = 1 - 2 x_1 x_2 [A12 (2 x_2 - x_1) + A21 (2 x_1 - x_2)]
-        x1, x2 = x
-        return numpy.array([[1.0 - 2 * x1 * x2 * (self.A12 * (2 * x2 - x1)
-                                                   + self.A21 * (2 * x1 - x2))]])
+        x_A, x_B = x
+        return 1.0 - 2 * x_A * x_B * (self.A_12 * (2 * x_B - x_A) + self.A_21 * (2 * x_A - x_B))
+
+
+class SoaveRedlichKwong:
+    def __init__(self, R, T, P, v_ref, T_c, P_c, omega, l=0.0, l_b=0.0):
+        self.RT, self.P, self.v_ref = float(R) * float(T), float(P), float(v_ref)
+        T_c, P_c, omega = numpy.asarray([T_c, P_c, omega], dtype=float)
+        alpha_SRK = (1.0 + (0.480 + 1.574 * omega - 0.176 * omega ** 2)
+                     * (1.0 - numpy.sqrt(T / T_c))) ** 2
+        a = 0.42748 * alpha_SRK * (R * T_c) ** 2 / P_c
+        b = 0.08664 * R * T_c / P_c
+        a_AB = (1.0 - l) * numpy.sqrt(a[0] * a[1])
+        b_AB = (1.0 - l_b) * 0.5 * (b[0] + b[1])
+        self.a_ij = numpy.array([[a[0], a_AB], [a_AB, a[1]]])
+        self.b_ij = numpy.array([[b[0], b_AB], [b_AB, b[1]]])
+        pure = numpy.eye(2)
+        self.v_pure = self.liquid_volume(pure)[0]
+        self.G_R_pure = self.residual_gibbs(*self.mixing(pure)[:2], self.v_pure)
+
+    def mixing(self, x):
+        x_A, x_B = x
+        (a_AA, a_AB), (_, a_BB) = self.a_ij
+        (b_AA, b_AB), (_, b_BB) = self.b_ij
+        a = x_A ** 2 * a_AA + 2.0 * x_A * x_B * a_AB + x_B ** 2 * a_BB
+        b = x_A ** 2 * b_AA + 2.0 * x_A * x_B * b_AB + x_B ** 2 * b_BB
+        a_x = 2.0 * (x_A * a_AA + (x_B - x_A) * a_AB - x_B * a_BB)
+        b_x = 2.0 * (x_A * b_AA + (x_B - x_A) * b_AB - x_B * b_BB)
+        a_xx = 2.0 * (a_AA - 2.0 * a_AB + a_BB)
+        b_xx = 2.0 * (b_AA - 2.0 * b_AB + b_BB)
+        return a, b, a_x, b_x, a_xx, b_xx
+
+    def root(self, a, b):
+        coefficients = numpy.stack([self.P * numpy.ones_like(b), -self.RT * numpy.ones_like(b),
+                                    a - self.RT * b - self.P * b ** 2, -a * b],
+                                   axis=-1).reshape(-1, 4)
+        v = numpy.array([numpy.roots(c) for c in coefficients], dtype=complex)
+        v = numpy.where(v.imag == 0, v.real, numpy.inf)
+        return v.min(axis=1).reshape(numpy.shape(b))
+
+    @composition_cache
+    def liquid_volume(self, x):
+        a, b, a_x, b_x, a_xx, b_xx = self.mixing(x)
+        P, RT = self.P, self.RT
+        v = self.root(a, b)
+        C_v = 3.0 * P * v ** 2 - 2.0 * RT * v + a - RT * b - P * b ** 2
+        v_x = (((RT + 2.0 * P * b) * v + a) * b_x - (v - b) * a_x) / C_v
+        v_xx = -((6.0 * P * v - 2.0 * RT) * v_x ** 2
+                 + 2.0 * (a_x - (RT + 2.0 * P * b) * b_x) * v_x
+                 - 2.0 * b_x * (a_x + P * v * b_x)
+                 + (v - b) * a_xx
+                 - ((RT + 2.0 * P * b) * v + a) * b_xx) / C_v
+        return v, v_x, v_xx
+
+    def residual_gibbs(self, a, b, v):
+        P_RT = self.P / self.RT
+        return (P_RT * v - 1.0 - numpy.log(P_RT * (v - b))
+                - a / (b * self.RT) * numpy.log(1.0 + b / v))
+
+    def molar_volume(self, x):
+        v, v_x, v_xx = self.liquid_volume(x)
+        return v / self.v_ref, v_x / self.v_ref, v_xx / self.v_ref
+
+    def excess_volume(self, x):
+        v, v_x, v_xx = self.liquid_volume(x)
+        return ((v - x[0] * self.v_pure[0] - x[1] * self.v_pure[1]) / self.v_ref,
+                (v_x - self.v_pure[0] + self.v_pure[1]) / self.v_ref,
+                v_xx / self.v_ref)
+
+    def excess_gibbs(self, x):
+        a, b, a_x, b_x, a_xx, b_xx = self.mixing(x)
+        v, v_x, _ = self.liquid_volume(x)
+        P_RT = self.P / self.RT
+        ratio, ln_1_b_v = a / (b * self.RT), numpy.log(1.0 + b / v)
+        ln_a_x, ln_b_x = a_x / a, b_x / b
+        G = self.residual_gibbs(a, b, v) - x[0] * self.G_R_pure[0] - x[1] * self.G_R_pure[1]
+        G_x = ((P_RT * v - 1.0) * ln_b_x - ratio * ln_1_b_v * (ln_a_x - ln_b_x)
+               - (self.G_R_pure[0] - self.G_R_pure[1]))
+        G_xx = (P_RT * v_x * ln_b_x + (P_RT * v - 1.0) * (b_xx / b - ln_b_x ** 2)
+                - ratio * ln_1_b_v * (a_xx / a - b_xx / b - 2.0 * ln_b_x * (ln_a_x - ln_b_x))
+                - a / (self.RT * (v + b)) * (ln_b_x - v_x / v) * (ln_a_x - ln_b_x))
+        return G, G_x, G_xx
+
+    def ln_gamma(self, x):
+        G, G_x, _ = self.excess_gibbs(x)
+        return numpy.array([G + x[1] * G_x, G - x[0] * G_x])
+
+    def thermodynamic_factor(self, x):
+        _, _, G_xx = self.excess_gibbs(x)
+        return 1.0 + x[0] * x[1] * G_xx
 
 
 class Mixture:
-    """Two solvents as dimensionless groups; either order is accepted.
-
-    The components are known by name.  The first is independent; the second
-    is the balance, whose volume fraction is whatever the first leaves.
-    """
-
-    def __init__(self, gamma, alpha, theta, nu, D0, activity=None, names=None):
-        self.gamma = numpy.asarray(gamma, dtype=float)
+    def __init__(self, phi_g_sat, alpha, theta, v_i, D0, excess_volume,
+                 activity=None):
+        self.phi_g_sat = numpy.asarray(phi_g_sat, dtype=float)
         self.alpha = numpy.asarray(alpha, dtype=float)
         self.theta = numpy.asarray(theta, dtype=float)
-        self.nu = numpy.asarray(nu, dtype=float)
+        self.v_i = numpy.asarray(v_i, dtype=float)
         self.D0 = numpy.asarray(D0, dtype=float)
-        self.n = self.gamma.size
-        # the interface solve brackets a single unknown: two components only
-        if self.n != 2:
-            raise ValueError(f"Give two "
-                             f"solvents, not {self.n}")
+        if self.phi_g_sat.size != 2:
+            raise ValueError(f"Give two solvents, not {self.phi_g_sat.size}")
         self.activity = Ideal() if activity is None else activity
+        self.excess_volume = Ideal() if excess_volume is None else excess_volume
 
-        if names is None:
-            names = [f"component {i + 1}" for i in range(self.n)]
-        self.names = list(names)
-        if len(self.names) != self.n or len(set(self.names)) != self.n:
-            raise ValueError(f"give {self.n} distinct component names, "
-                             f"not {self.names}")
-        self.components = self.names[:-1]
-        self.balance = self.names[-1]
+    def molar_volume(self, x):
+        if not isinstance(self.excess_volume, Ideal):
+            return self.excess_volume.molar_volume(x)
+        v = x[0] * self.v_i[0] + x[1] * self.v_i[1]
+        v_x = self.v_i[0] - self.v_i[1]
+        return v, v_x, 0.0
 
-    def volume_fractions(self, components, tol=1e-12):
-        """phi, (N, ...) in name order, from the independent phi_i by name.
+    def partial_volumes(self, x):
+        v, v_x, _ = self.molar_volume(x)
+        return numpy.array([v + x[1] * v_x, v - x[0] * v_x])
 
-        The balance component makes up the rest, and the result is checked to
-        sum to one.
-        """
-        if set(components) != set(self.components):
-            raise ValueError(f"give the independent components "
-                             f"{self.components}, not {list(components)}")
-        phi = {}
-        for name in self.components:
-            phi[name] = numpy.asarray(components[name], dtype=float)
+    def ideal_mole_fraction(self, phi_A):
+        C_A, C_B = phi_A / self.v_i[0], (1.0 - phi_A) / self.v_i[1]
+        return C_A / (C_A + C_B)
 
-        phi[self.balance] = 1.0
-        for name in self.components:
-            phi[self.balance] = phi[self.balance] - phi[name]
+    def mole_fractions_phi(self, phi_A):
+        def phi_A_error(x_A):
+            x = numpy.array([x_A, 1.0 - x_A])
+            v, _, _ = self.molar_volume(x)
+            V_bar_A, _ = self.partial_volumes(x)
+            return x_A * V_bar_A / v - phi_A
 
-        total = 0.0
-        for name in self.names:
-            total = total + phi[name]
-        error = numpy.max(numpy.abs(total - 1.0))
-        # not (error <= tol), so that a NaN fails as well
-        if not error <= tol:
-            raise ValueError(f"volume fractions of {' + '.join(self.names)} "
-                             f"do not sum to one: off by {error:.3g}")
+        x_A = self.ideal_mole_fraction(phi_A)
+        if not isinstance(self.excess_volume, Ideal):
+            x_A = scipy.optimize.newton(phi_A_error, x_A, tol=1e-15)
+        return numpy.array([x_A, 1.0 - x_A])
 
-        result = numpy.empty((self.n,) + numpy.shape(phi[self.balance]))
-        for i, name in enumerate(self.names):
-            result[i] = phi[name]
-        return result
+    def s_x(self, x):
+        v, _, v_xx = self.molar_volume(x)
+        V_bar_A, V_bar_B = self.partial_volumes(x)
+        curvature = x[0] * x[1] * v * v_xx
+        return curvature / (V_bar_A * V_bar_B + curvature)
 
-    def mole_fractions(self, phi):
-        """Mole fractions at phi (N,), normalised over components; not clipped."""
-        c = phi / self.nu
-        return c / c.sum()
+    def vapour_fraction_x(self, x):
+        return self.phi_g_sat * numpy.exp(self.activity.ln_gamma(x)) * x
 
-    def vapour_fraction(self, phi):
-        """Modified Raoult's law: psi_i = gamma_i gamma^act_i x_i."""
-        # psi_i^s = gamma_i gamma^act_i x_i^(l),  gamma_i = p_sat,i v_i / (R T)
-        x = self.mole_fractions(phi)
-        return self.gamma * numpy.exp(self.activity.ln_gamma(x)) * x
-
-    def fick_matrix(self, phi):
-        """Volume-frame Fick matrix over D_ref, (N-1, N-1), at phi (N,)."""
-        Gamma = self.activity.thermodynamic_factor(self.mole_fractions(phi))
-        return diffusion.fick_matrix(phi, self.nu, self.D0, Gamma)
+    def diffusivity_x(self, x):
+        D_MS = self.D0[1] ** x[0] * self.D0[0] ** x[1]
+        return D_MS * self.activity.thermodynamic_factor(x)
